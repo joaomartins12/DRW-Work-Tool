@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using System.Windows.Forms;
 using System.Xml.Linq;
+using DRW_Work_Tool.Core;
 
 namespace DRW_Work_Tool
 {
@@ -203,7 +204,7 @@ namespace DRW_Work_Tool
         private static void TryAssignFreshCloneId(object service, XElement clone)
         {
             XElement? idElement = CloneIdentityElementNames
-                .Select(clone.Element)
+                .Select(name => clone.Element(name))
                 .FirstOrDefault(x => x != null);
 
             if (idElement == null ||
