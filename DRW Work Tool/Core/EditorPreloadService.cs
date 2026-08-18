@@ -67,6 +67,8 @@ namespace DRW_Work_Tool.Core
                     return
                         _itemList != null &&
                         _references != null &&
+                        _digimonModels != null &&
+                        _digimonList != null &&
                         _preloadError == null;
             }
         }
@@ -1309,7 +1311,7 @@ namespace DRW_Work_Tool.Core
             Report(
                 progress,
                 90,
-                "Loading Monster.xml database (data cache only)...");
+                "Loading Monster.xml database...");
 
             if (File.Exists(monsterPath))
             {
@@ -1333,7 +1335,7 @@ namespace DRW_Work_Tool.Core
             Report(
                 progress,
                 91,
-                "Loading MonstersSkill.xml mechanics (data cache only)...");
+                "Loading MonstersSkill.xml mechanics...");
 
             if (File.Exists(monsterSkillPath))
             {
@@ -1398,25 +1400,42 @@ namespace DRW_Work_Tool.Core
             Report(
                 progress,
                 93,
-                "Loading Digimon models from Model.xml...");
+                "Loading complete Digimon model catalog from Model.xml...");
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Model.xml is a core editor dependency. Do not silently continue
+            // with a half-initialized application: the Digimon model picker,
+            // Monster editor and Digimon_List editor all depend on this index.
+            DigimonModelReferenceService models;
 
             try
             {
-                DigimonModelReferenceService models =
+                models =
                     DigimonModelReferenceService.Load(
                         File.Exists(modelPath)
                             ? modelPath
                             : null);
-
-                lock (Sync)
-                {
-                    _digimonModels = models;
-                    _digimonModelPath = models.SourcePath;
-                }
             }
-            catch
+            catch (Exception ex)
             {
+                throw new InvalidDataException(
+                    "Required Model.xml Digimon model catalog could not be preloaded. " +
+                    "The main editor will not open with an incomplete model cache.",
+                    ex);
             }
+
+            lock (Sync)
+            {
+                _digimonModels = models;
+                _digimonModelPath =
+                    models.SourcePath;
+            }
+
+            Report(
+                progress,
+                94,
+                $"Digimon model catalog ready: {models.Models.Count:N0} Data\\Digimon models.");
 
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -1445,9 +1464,11 @@ namespace DRW_Work_Tool.Core
                                 digimonListPath);
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Opening the editor still has a background fallback.
+                    throw new InvalidDataException(
+                        "Required Digimon_List.xml image/reference cache could not be preloaded.",
+                        ex);
                 }
             }
 

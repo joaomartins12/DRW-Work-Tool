@@ -46,6 +46,7 @@ namespace DRW_Work_Tool
             public required MonsterSkillEditorService Service { get; set; }
             public required MonsterReferenceCatalog Monsters { get; set; }
             public required BuffMiniCatalog? Buffs { get; init; }
+            public required TalkMessageCatalog TalkMessages { get; init; }
             public required TextBox Search { get; init; }
             public required ComboBox UseTermFilter { get; init; }
             public required Label CountLabel { get; init; }
@@ -56,7 +57,7 @@ namespace DRW_Work_Tool
             public required Button NextButton { get; init; }
             public required Label PageLabel { get; init; }
             public int PageIndex { get; set; }
-            public const int PageSize = 24;
+            public const int PageSize = 18;
         }
 
         private sealed class MonsterSkillEditState
@@ -64,6 +65,7 @@ namespace DRW_Work_Tool
             public required MonsterSkillEditorService Service { get; init; }
             public required MonsterReferenceCatalog Monsters { get; init; }
             public required BuffMiniCatalog? Buffs { get; init; }
+            public required TalkMessageCatalog TalkMessages { get; init; }
             public required MonsterSkillTermsEditorService? Terms { get; init; }
             public required XElement Working { get; init; }
             public required Dictionary<string, Control> Editors { get; init; }
@@ -75,7 +77,6 @@ namespace DRW_Work_Tool
             public required Label Factor1Label { get; init; }
             public required Label Factor2Label { get; init; }
             public required Label Factor3Label { get; init; }
-            public required RichTextBox XmlPreview { get; init; }
             public bool Dirty { get; set; }
             public Action? RefreshBrowser { get; init; }
         }
@@ -827,202 +828,735 @@ namespace DRW_Work_Tool
 
         private async void OpenMonsterSkillBrowser(string xmlPath)
         {
-            string fullPath = Path.GetFullPath(xmlPath);
-            var page = CreateDarkTab("MonstersSkill.xml");
-            page.Name = fullPath;
+            string fullPath =
+                Path.GetFullPath(
+                    xmlPath);
 
-            var loading = new EditorLoadingView(
-                "Loading MonstersSkill.xml",
-                "Preparing monster skill mechanics, monster references and buff/debuff catalogs.");
-            page.Controls.Add(loading);
-            editorTabs.TabPages.Add(page);
-            editorTabs.SelectedTab = page;
+            var page =
+                CreateDarkTab(
+                    "MonstersSkill.xml");
+
+            page.Name =
+                fullPath;
+
+            var loading =
+                new EditorLoadingView(
+                    "Loading MonstersSkill.xml",
+                    "Preparing monster skill mechanics, monster references, filters and the first page.");
+
+            loading.Dock =
+                DockStyle.Fill;
+
+            page.Controls.Add(
+                loading);
+
+            editorTabs.TabPages.Add(
+                page);
+
+            editorTabs.SelectedTab =
+                page;
+
             UpdateEditorEmptyState();
             UpdateEditorTabChrome();
 
             MonsterSkillEditorService service;
             MonsterReferenceCatalog monsterCatalog;
             BuffMiniCatalog? buffCatalog;
+            TalkMessageCatalog talkMessages;
             MonsterSkillTermsEditorService? termsService;
+
             try
             {
-                service = await EditorPreloadService.GetMonsterSkillEditorAsync(fullPath);
-                monsterCatalog = LoadMonsterCatalogSafe();
-                buffCatalog = BuffMiniCatalog.TryLoadDefault();
-                termsService = TryLoadMonsterSkillTermsNear(fullPath);
+                service =
+                    await EditorPreloadService
+                        .GetMonsterSkillEditorAsync(
+                            fullPath);
+
+                monsterCatalog =
+                    LoadMonsterCatalogSafe();
+
+                buffCatalog =
+                    BuffMiniCatalog
+                        .TryLoadDefault();
+
+                // TalkMessage.xml is prepared together with MonstersSkill.xml
+                // so opening EDIT never has to parse thousands of messages.
+                talkMessages =
+                    TalkMessageCatalog.LoadNear(
+                        fullPath);
+
+                termsService =
+                    TryLoadMonsterSkillTermsNear(
+                        fullPath);
             }
             catch (Exception ex)
             {
                 if (!page.IsDisposed)
-                    loading.SetError("MonstersSkill.xml could not be loaded", ex.Message);
+                {
+                    loading.SetError(
+                        "MonstersSkill.xml could not be loaded",
+                        ex.Message);
+                }
+
                 return;
             }
 
             if (page.IsDisposed)
                 return;
 
-            page.SuspendLayout();
-            page.Controls.Clear();
+            // Build everything behind the loading screen. The user only sees
+            // the completed first frame, never half-created controls.
+            var content =
+                new Panel
+                {
+                    Dock = DockStyle.Fill,
+                    BackColor = CEditor,
+                    Visible = false
+                };
 
-            var header = CreateBrowserHeader("MonstersSkill.xml", "Visual Monster Skill Editor", out TextBox search, out Label countLabel);
-            search.PlaceholderText = "Pesquisar Skill_IDX, MonsterID, UseTerms ou descrição...";
+            var header =
+                new Panel
+                {
+                    Dock = DockStyle.Top,
+                    Height = 132,
+                    BackColor =
+                        Color.FromArgb(
+                            27,
+                            27,
+                            27)
+                };
 
-            var filterLabel = new Label
+            header.Paint +=
+                (_, e) =>
+                {
+                    using var pen =
+                        new Pen(
+                            Color.FromArgb(
+                                58,
+                                58,
+                                58));
+
+                    e.Graphics.DrawLine(
+                        pen,
+                        0,
+                        header.Height - 1,
+                        header.Width,
+                        header.Height - 1);
+                };
+
+            var title =
+                new Label
+                {
+                    Text = "MonstersSkill.xml",
+                    ForeColor = CText,
+                    Font =
+                        new Font(
+                            "Segoe UI Semibold",
+                            15F,
+                            FontStyle.Bold),
+                    Location =
+                        new Point(
+                            20,
+                            12),
+                    Size =
+                        new Size(
+                            330,
+                            30)
+                };
+
+            var subtitle =
+                new Label
+                {
+                    Text =
+                        "Visual Monster Skill Editor",
+                    ForeColor = CMuted,
+                    Font =
+                        new Font(
+                            "Segoe UI",
+                            8.5F),
+                    Location =
+                        new Point(
+                            22,
+                            40),
+                    Size =
+                        new Size(
+                            330,
+                            20)
+                };
+
+            var newButton =
+                CreateEditorActionButton(
+                    "NEW SKILL");
+
+            newButton.Size =
+                new Size(
+                    124,
+                    34);
+
+            var search =
+                new TextBox
+                {
+                    PlaceholderText =
+                        "Pesquisar Skill_IDX, MonsterID, Monster Name, UseTerms ou descrição...",
+                    BackColor =
+                        Color.FromArgb(
+                            12,
+                            12,
+                            12),
+                    ForeColor = CText,
+                    BorderStyle =
+                        BorderStyle.FixedSingle,
+                    Font =
+                        new Font(
+                            "Segoe UI",
+                            9F),
+                    Location =
+                        new Point(
+                            20,
+                            70),
+                    Height = 26
+                };
+
+            var filterLabel =
+                new Label
+                {
+                    Text = "UseTerms",
+                    ForeColor = CMuted,
+                    Font =
+                        new Font(
+                            "Segoe UI",
+                            8.2F),
+                    AutoSize = false,
+                    TextAlign =
+                        ContentAlignment.MiddleRight,
+                    Size =
+                        new Size(
+                            66,
+                            26)
+                };
+
+            var filter =
+                new ComboBox
+                {
+                    DropDownStyle =
+                        ComboBoxStyle.DropDownList,
+                    FlatStyle =
+                        FlatStyle.Flat,
+                    BackColor =
+                        Color.FromArgb(
+                            18,
+                            18,
+                            18),
+                    ForeColor = CText,
+                    Font =
+                        new Font(
+                            "Segoe UI",
+                            8.8F),
+                    Size =
+                        new Size(
+                            190,
+                            26)
+                };
+
+            filter.Items.Add(
+                new ComboOption(
+                    -1,
+                    "All UseTerms"));
+
+            foreach (UseTermInfo info in
+                     MonsterUseTermCatalog.All)
             {
-                Text = "UseTerms",
-                ForeColor = CMuted,
-                Font = new Font("Segoe UI", 8.5F),
-                AutoSize = true,
-                Location = new Point(510, 75)
-            };
-            var filter = new ComboBox
+                filter.Items.Add(
+                    new ComboOption(
+                        info.Value,
+                        $"{info.Value} - {info.Name}"));
+            }
+
+            filter.SelectedIndex =
+                0;
+
+            var countLabel =
+                new Label
+                {
+                    ForeColor =
+                        Color.FromArgb(
+                            150,
+                            150,
+                            150),
+                    Font =
+                        new Font(
+                            "Segoe UI",
+                            8.3F),
+                    AutoSize = false,
+                    Location =
+                        new Point(
+                            20,
+                            104),
+                    Size =
+                        new Size(
+                            320,
+                            18)
+                };
+
+            header.Controls.Add(
+                title);
+
+            header.Controls.Add(
+                subtitle);
+
+            header.Controls.Add(
+                newButton);
+
+            header.Controls.Add(
+                search);
+
+            header.Controls.Add(
+                filterLabel);
+
+            header.Controls.Add(
+                filter);
+
+            header.Controls.Add(
+                countLabel);
+
+            var previous =
+                CreateEditorActionButton(
+                    "◀ PREVIOUS");
+
+            previous.Size =
+                new Size(
+                    112,
+                    30);
+
+            var pageLabel =
+                new Label
+                {
+                    ForeColor = CText,
+                    Font =
+                        new Font(
+                            "Segoe UI Semibold",
+                            8.5F),
+                    TextAlign =
+                        ContentAlignment.MiddleCenter,
+                    AutoSize = false,
+                    Size =
+                        new Size(
+                            90,
+                            30)
+                };
+
+            var next =
+                CreateEditorActionButton(
+                    "NEXT ▶");
+
+            next.Size =
+                new Size(
+                    112,
+                    30);
+
+            var nav =
+                new Panel
+                {
+                    Dock = DockStyle.Bottom,
+                    Height = 46,
+                    BackColor = CEditor
+                };
+
+            nav.Controls.Add(
+                previous);
+
+            nav.Controls.Add(
+                pageLabel);
+
+            nav.Controls.Add(
+                next);
+
+            var resultsHost =
+                new Panel
+                {
+                    Dock = DockStyle.Fill,
+                    BackColor = CEditor,
+                    Padding =
+                        new Padding(
+                            18,
+                            12,
+                            18,
+                            12)
+                };
+
+            var results =
+                new FlowLayoutPanel
+                {
+                    Dock = DockStyle.Fill,
+                    AutoScroll = true,
+                    WrapContents = false,
+                    FlowDirection =
+                        FlowDirection.TopDown,
+                    BackColor = CEditor,
+                    Padding =
+                        new Padding(
+                            0,
+                            0,
+                            34,
+                            24)
+                };
+
+            DarkUi.ApplyDarkScrollBar(
+                results);
+
+            resultsHost.Controls.Add(
+                results);
+
+            var timer =
+                new System.Windows.Forms.Timer
+                {
+                    Interval = 220
+                };
+
+            var state =
+                new MonsterSkillBrowseState
+                {
+                    Service = service,
+                    Monsters = monsterCatalog,
+                    Buffs = buffCatalog,
+                    TalkMessages = talkMessages,
+                    Search = search,
+                    UseTermFilter = filter,
+                    CountLabel = countLabel,
+                    Results = results,
+                    SearchTimer = timer,
+                    XmlPath = fullPath,
+                    PreviousButton = previous,
+                    NextButton = next,
+                    PageLabel = pageLabel,
+                    PageIndex = 0
+                };
+
+            page.Tag =
+                state;
+
+            void RelayoutHeader()
             {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(18, 18, 18),
-                ForeColor = CText,
-                Font = new Font("Segoe UI", 9F),
-                Size = new Size(190, 26),
-                Location = new Point(570, 72)
-            };
-            filter.Items.Add(new ComboOption(-1, "All UseTerms"));
-            foreach (UseTermInfo info in MonsterUseTermCatalog.All)
-                filter.Items.Add(new ComboOption(info.Value, $"{info.Value} - {info.Name}"));
-            filter.SelectedIndex = 0;
+                int width =
+                    Math.Max(
+                        420,
+                        header.ClientSize.Width);
 
-            var newButton = CreateEditorActionButton("NEW SKILL");
-            newButton.Size = new Size(120, 34);
-            newButton.Location = new Point(780, 68);
+                newButton.Location =
+                    new Point(
+                        Math.Max(
+                            20,
+                            width -
+                            newButton.Width -
+                            20),
+                        14);
 
-            header.Controls.Add(filterLabel);
-            header.Controls.Add(filter);
-            header.Controls.Add(newButton);
-            PositionHeaderActions(header, newButton);
+                const int filterWidth = 190;
+                const int filterLabelWidth = 66;
+                const int gap = 10;
 
-            var previous = CreateEditorActionButton("◀ PREVIOUS");
-            previous.Size = new Size(112, 30);
+                int filterRight =
+                    width - 20;
 
-            var pageLabel = new Label
+                filter.Location =
+                    new Point(
+                        Math.Max(
+                            20,
+                            filterRight -
+                            filterWidth),
+                        70);
+
+                filterLabel.Location =
+                    new Point(
+                        Math.Max(
+                            20,
+                            filter.Left -
+                            filterLabelWidth -
+                            4),
+                        70);
+
+                int searchRight =
+                    filterLabel.Left -
+                    gap;
+
+                search.Width =
+                    Math.Max(
+                        170,
+                        searchRight -
+                        search.Left);
+
+                // Compact fallback: if there isn't enough room for search and
+                // filter side-by-side, the filter moves to its own row.
+                if (search.Width < 250)
+                {
+                    header.Height =
+                        162;
+
+                    search.Width =
+                        Math.Max(
+                            180,
+                            width -
+                            40);
+
+                    filterLabel.Location =
+                        new Point(
+                            20,
+                            106);
+
+                    filter.Location =
+                        new Point(
+                            92,
+                            106);
+
+                    countLabel.Location =
+                        new Point(
+                            20,
+                            136);
+                }
+                else
+                {
+                    header.Height =
+                        132;
+
+                    countLabel.Location =
+                        new Point(
+                            20,
+                            104);
+                }
+            }
+
+            void RelayoutNavigation()
             {
-                ForeColor = CText,
-                Font = new Font("Segoe UI Semibold", 8.5F),
-                TextAlign = ContentAlignment.MiddleCenter,
-                AutoSize = false,
-                Size = new Size(90, 30)
-            };
+                int center =
+                    nav.ClientSize.Width / 2;
 
-            var next = CreateEditorActionButton("NEXT ▶");
-            next.Size = new Size(112, 30);
+                pageLabel.Location =
+                    new Point(
+                        center -
+                        pageLabel.Width / 2,
+                        8);
 
-            var nav = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Bottom,
-                Height = 42,
-                FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = false,
-                BackColor = CEditor,
-                Padding = new Padding(18, 6, 0, 4)
-            };
-            nav.Controls.Add(previous);
-            nav.Controls.Add(pageLabel);
-            nav.Controls.Add(next);
+                previous.Location =
+                    new Point(
+                        Math.Max(
+                            12,
+                            pageLabel.Left -
+                            previous.Width -
+                            10),
+                        8);
 
-            var resultsHost = new Panel
-            {
-                Dock = DockStyle.Fill,
-                BackColor = CEditor,
-                Padding = new Padding(18, 12, 12, 12)
-            };
-            var results = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                AutoScroll = true,
-                WrapContents = false,
-                FlowDirection = FlowDirection.TopDown,
-                BackColor = CEditor,
-                Padding = new Padding(0, 0, 34, 22)
-            };
-            DarkUi.ApplyDarkScrollBar(results);
-            resultsHost.Controls.Add(results);
+                next.Location =
+                    new Point(
+                        Math.Min(
+                            Math.Max(
+                                12,
+                                nav.ClientSize.Width -
+                                next.Width -
+                                12),
+                            pageLabel.Right +
+                            10),
+                        8);
+            }
 
-            var timer = new System.Windows.Forms.Timer { Interval = 220 };
-            var state = new MonsterSkillBrowseState
-            {
-                Service = service,
-                Monsters = monsterCatalog,
-                Buffs = buffCatalog,
-                Search = search,
-                UseTermFilter = filter,
-                CountLabel = countLabel,
-                Results = results,
-                SearchTimer = timer,
-                XmlPath = fullPath,
-                PreviousButton = previous,
-                NextButton = next,
-                PageLabel = pageLabel,
-                PageIndex = 0
-            };
-            page.Tag = state;
+            header.Resize +=
+                (_, _) =>
+                    RelayoutHeader();
 
-            timer.Tick += (_, _) =>
-            {
-                timer.Stop();
-                RenderMonsterSkillResults(state);
-            };
-            search.TextChanged += (_, _) => { timer.Stop(); timer.Start(); };
-            filter.SelectedIndexChanged += (_, _) =>
-            {
-                state.PageIndex = 0;
-                RenderMonsterSkillResults(state);
-            };
+            nav.Resize +=
+                (_, _) =>
+                    RelayoutNavigation();
 
-            previous.Click += (_, _) =>
+            int lastResultsWidth =
+                results.ClientSize.Width;
+
+            results.Resize +=
+                (_, _) =>
+                {
+                    if (Math.Abs(
+                            results.ClientSize.Width -
+                            lastResultsWidth) < 8)
+                    {
+                        return;
+                    }
+
+                    lastResultsWidth =
+                        results.ClientSize.Width;
+
+                    RenderMonsterSkillResults(
+                        state);
+                };
+
+            timer.Tick +=
+                (_, _) =>
+                {
+                    timer.Stop();
+                    state.PageIndex = 0;
+
+                    RenderMonsterSkillResults(
+                        state);
+                };
+
+            search.TextChanged +=
+                (_, _) =>
+                {
+                    timer.Stop();
+                    timer.Start();
+                };
+
+            filter.SelectedIndexChanged +=
+                (_, _) =>
+                {
+                    state.PageIndex = 0;
+
+                    RenderMonsterSkillResults(
+                        state);
+
+                    ResetEditorVerticalScroll(
+                        state.Results);
+                };
+
+            previous.Click +=
+                (_, _) =>
+                {
+                    if (state.PageIndex <= 0)
+                        return;
+
+                    state.PageIndex--;
+
+                    RenderMonsterSkillResults(
+                        state);
+
+                    ResetEditorVerticalScroll(
+                        state.Results);
+                };
+
+            next.Click +=
+                (_, _) =>
+                {
+                    int? selectedUseTerm = null;
+
+                    if (state.UseTermFilter.SelectedItem is ComboOption selected &&
+                        selected.Value >= 0)
+                    {
+                        selectedUseTerm =
+                            selected.Value;
+                    }
+
+                    int total =
+                        SearchMonsterSkillRecords(
+                            state,
+                            selectedUseTerm).Count;
+
+                    int pages =
+                        Math.Max(
+                            1,
+                            (int)Math.Ceiling(
+                                total /
+                                (double)MonsterSkillBrowseState.PageSize));
+
+                    if (state.PageIndex >=
+                        pages - 1)
+                    {
+                        return;
+                    }
+
+                    state.PageIndex++;
+
+                    RenderMonsterSkillResults(
+                        state);
+
+                    ResetEditorVerticalScroll(
+                        state.Results);
+                };
+
+            newButton.Click +=
+                (_, _) =>
+                {
+                    XElement created =
+                        state.Service.CreateNewSkill();
+
+                    uint createdId =
+                        UIntValue(
+                            created,
+                            "Skill_IDX");
+
+                    state.Service.Save();
+
+                    RefreshMonsterSkillBrowser(
+                        state);
+
+                    XElement? reloaded =
+                        state.Service.Root
+                            .Elements("MonsterSkill")
+                            .FirstOrDefault(
+                                x =>
+                                    UIntValue(
+                                        x,
+                                        "Skill_IDX") ==
+                                    createdId);
+
+                    if (reloaded != null)
+                    {
+                        OpenMonsterSkillEditor(
+                            state,
+                            reloaded,
+                            termsService);
+                    }
+                };
+
+            content.Controls.Add(
+                resultsHost);
+
+            content.Controls.Add(
+                nav);
+
+            content.Controls.Add(
+                header);
+
+            page.Controls.Add(
+                content);
+
+            try
             {
-                if (state.PageIndex <= 0)
+                RelayoutHeader();
+                RelayoutNavigation();
+
+                RenderMonsterSkillResults(
+                    state);
+
+                // Let WinForms finish the first layout while still hidden.
+                await Task.Yield();
+
+                if (page.IsDisposed)
                     return;
 
-                state.PageIndex--;
-                RenderMonsterSkillResults(state);
-                ResetEditorVerticalScroll(state.Results);
-            };
+                page.Controls.Remove(
+                    loading);
 
-            next.Click += (_, _) =>
+                loading.Dispose();
+
+                content.Visible =
+                    true;
+
+                content.BringToFront();
+
+                content.PerformLayout();
+                results.PerformLayout();
+            }
+            catch (Exception ex)
             {
-                int? selectedUseTerm = null;
-                if (state.UseTermFilter.SelectedItem is ComboOption selected && selected.Value >= 0)
-                    selectedUseTerm = selected.Value;
+                content.Visible =
+                    false;
 
-                int total = state.Service.Search(state.Search.Text, selectedUseTerm).Count;
-                int pages = Math.Max(
-                    1,
-                    (int)Math.Ceiling(
-                        total /
-                        (double)MonsterSkillBrowseState.PageSize));
+                if (!loading.IsDisposed)
+                {
+                    loading.BringToFront();
 
-                if (state.PageIndex >= pages - 1)
-                    return;
-
-                state.PageIndex++;
-                RenderMonsterSkillResults(state);
-                ResetEditorVerticalScroll(state.Results);
-            };
-
-            newButton.Click += (_, _) =>
-            {
-                XElement created = state.Service.CreateNewSkill();
-                uint createdId = UIntValue(created, "Skill_IDX");
-                state.Service.Save();
-                RefreshMonsterSkillBrowser(state);
-                XElement? reloaded = state.Service.Root.Elements("MonsterSkill").FirstOrDefault(x => UIntValue(x, "Skill_IDX") == createdId);
-                if (reloaded != null)
-                    OpenMonsterSkillEditor(state, reloaded, termsService);
-            };
-
-            page.Controls.Add(resultsHost);
-            page.Controls.Add(nav);
-            page.Controls.Add(header);
-            RenderMonsterSkillResults(state);
-            page.ResumeLayout();
+                    loading.SetError(
+                        "Monster skill editor could not render",
+                        ex.Message);
+                }
+            }
         }
 
         private async void RefreshMonsterSkillBrowser(
@@ -1050,6 +1584,82 @@ namespace DRW_Work_Tool
             }
         }
 
+        private IReadOnlyList<MonsterSkillRecord> SearchMonsterSkillRecords(
+            MonsterSkillBrowseState state,
+            int? useTerms = null)
+        {
+            string query =
+                (state.Search.Text ?? string.Empty)
+                    .Trim();
+
+            // Start from the service filter so the existing Skill_IDX,
+            // MonsterID, SkillType and UseTerms behaviour remains intact.
+            if (query.Length == 0)
+            {
+                return
+                    state.Service.Search(
+                        string.Empty,
+                        useTerms);
+            }
+
+            // Direct MonstersSkill.xml matches.
+            HashSet<MonsterSkillRecord> matches =
+                state.Service.Search(
+                        query,
+                        useTerms)
+                    .ToHashSet();
+
+            // Also resolve the linked MonsterID against Monster.xml and allow
+            // searching by the monster's display name. Example:
+            // "Puppetmon" returns all MonsterSkill rows owned by Puppetmon.
+            IEnumerable<MonsterSkillRecord> candidates =
+                state.Service.Records;
+
+            if (useTerms.HasValue)
+            {
+                candidates =
+                    candidates.Where(
+                        x =>
+                            x.UseTerms ==
+                            useTerms.Value);
+            }
+
+            foreach (MonsterSkillRecord record in candidates)
+            {
+                MonsterRecord? monster =
+                    state.Monsters.Find(
+                        record.MonsterId);
+
+                if (monster == null)
+                    continue;
+
+                if (monster.DisplayName.Contains(
+                        query,
+                        StringComparison.CurrentCultureIgnoreCase))
+                {
+                    matches.Add(
+                        record);
+                }
+            }
+
+            // Preserve the normal browser ordering.
+            return
+                matches
+                    .OrderBy(
+                        x =>
+                            state.Monsters.Find(
+                                x.MonsterId)?.DisplayName ??
+                            string.Empty,
+                        StringComparer.CurrentCultureIgnoreCase)
+                    .ThenBy(
+                        x =>
+                            x.MonsterId)
+                    .ThenBy(
+                        x =>
+                            x.SkillIndex)
+                    .ToList();
+        }
+
         private void RenderMonsterSkillResults(
             MonsterSkillBrowseState state)
         {
@@ -1061,8 +1671,8 @@ namespace DRW_Work_Tool
             }
 
             IReadOnlyList<MonsterSkillRecord> filtered =
-                state.Service.Search(
-                    state.Search.Text,
+                SearchMonsterSkillRecords(
+                    state,
                     filterValue);
 
             int pages = Math.Max(
@@ -1117,105 +1727,311 @@ namespace DRW_Work_Tool
                 true);
         }
 
-        private Control CreateMonsterSkillCard(MonsterSkillBrowseState state, MonsterSkillRecord record)
+        private Control CreateMonsterSkillCard(
+            MonsterSkillBrowseState state,
+            MonsterSkillRecord record)
         {
-            MonsterRecord? monster = state.Monsters.Find(record.MonsterId);
-            UseTermInfo useTerm = MonsterUseTermCatalog.Get(record.UseTerms);
+            MonsterRecord? monster =
+                state.Monsters.Find(
+                    record.MonsterId);
+
+            UseTermInfo useTerm =
+                MonsterUseTermCatalog.Get(
+                    record.UseTerms);
 
             int availableWidth =
                 Math.Max(
-                    440,
+                    380,
                     state.Results.ClientSize.Width -
                     state.Results.Padding.Horizontal -
                     SystemInformation.VerticalScrollBarWidth -
-                    22);
+                    12);
 
-            var card = new Panel
-            {
-                Width = availableWidth,
-                Height = 116,
-                BackColor = Color.FromArgb(27, 27, 27),
-                Margin = new Padding(0, 0, 0, 10)
-            };
-            card.Paint += (_, e) =>
-            {
-                using var p = new Pen(Color.FromArgb(58, 58, 58));
-                e.Graphics.DrawRectangle(p, 0, 0, card.Width - 1, card.Height - 1);
-            };
-
-            var icon = new PictureBox
-            {
-                Location = new Point(16, 16),
-                Size = new Size(72, 72),
-                BackColor = Color.FromArgb(16, 16, 16),
-                SizeMode = PictureBoxSizeMode.Zoom,
-                Image = MonsterAssetResolver.TryGetPreloadedMonsterDigimonIcon(monster?.ModelDigimon ?? 0)
-            };
-
-            var name = new Label
-            {
-                Text = monster?.DisplayName ?? $"Monster {record.MonsterId}",
-                ForeColor = CText,
-                Font = new Font("Segoe UI Semibold", 12F, FontStyle.Bold),
-                AutoSize = false,
-                Location = new Point(104, 14),
-                Size = new Size(480, 24),
-                AutoEllipsis = true
-            };
-            var meta = new Label
-            {
-                Text = $"Skill_IDX {record.SkillIndex}  •  MonsterID {record.MonsterId}  •  UseTerms {record.UseTerms} ({useTerm.Name})  •  SkillType {record.SkillType}",
-                ForeColor = CMuted,
-                Font = new Font("Segoe UI", 8.5F),
-                AutoSize = false,
-                Location = new Point(104, 42),
-                Size = new Size(620, 19),
-                AutoEllipsis = true
-            };
-            var detail = new Label
-            {
-                Text = $"{useTerm.Description}  •  Cool {record.CoolTime} ms  •  Cast {record.CastTime} ms  •  Factors [{record.EffectFactor1}, {record.EffectFactor2}, {record.EffectFactor3}]",
-                ForeColor = useTerm.Implemented ? Color.FromArgb(115, 225, 145) : Color.FromArgb(244, 190, 102),
-                Font = new Font("Segoe UI", 8.2F),
-                AutoSize = false,
-                Location = new Point(104, 66),
-                Size = new Size(620, 32),
-                AutoEllipsis = true
-            };
-
-            var edit = CreateEditorActionButton("EDIT");
-            edit.Size = new Size(110, 34);
-            edit.Location = new Point(card.Width - 250, 16);
-            edit.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            edit.Click += (_, _) => OpenMonsterSkillEditor(state, record.Node, TryLoadMonsterSkillTermsNear(state.XmlPath));
-
-            var remove = CreateEditorActionButton("REMOVE");
-            remove.Size = new Size(110, 34);
-            remove.Location = new Point(card.Width - 128, 16);
-            remove.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            remove.ForeColor = Color.FromArgb(255, 120, 120);
-            remove.Click += (_, _) =>
-            {
-                if (MessageBox.Show(
-                        $"Remover monster skill {record.SkillIndex} de MonsterID {record.MonsterId}?",
-                        "Confirmar",
-                        MessageBoxButtons.YesNo,
-                        MessageBoxIcon.Warning) != DialogResult.Yes)
+            var card =
+                new Panel
                 {
-                    return;
-                }
+                    Width = availableWidth,
+                    Height = 126,
+                    BackColor =
+                        Color.FromArgb(
+                            27,
+                            27,
+                            27),
+                    Margin =
+                        new Padding(
+                            0,
+                            0,
+                            0,
+                            10)
+                };
 
-                state.Service.Delete(record.Node);
-                state.Service.Save();
-                RefreshMonsterSkillBrowser(state);
-            };
+            card.Paint +=
+                (_, e) =>
+                {
+                    using var pen =
+                        new Pen(
+                            Color.FromArgb(
+                                58,
+                                58,
+                                58));
 
-            card.Controls.Add(icon);
-            card.Controls.Add(name);
-            card.Controls.Add(meta);
-            card.Controls.Add(detail);
-            card.Controls.Add(edit);
-            card.Controls.Add(remove);
+                    e.Graphics.DrawRectangle(
+                        pen,
+                        0,
+                        0,
+                        card.Width - 1,
+                        card.Height - 1);
+                };
+
+            var icon =
+                new PictureBox
+                {
+                    Location =
+                        new Point(
+                            14,
+                            18),
+                    Size =
+                        new Size(
+                            72,
+                            72),
+                    BackColor =
+                        Color.FromArgb(
+                            16,
+                            16,
+                            16),
+                    SizeMode =
+                        PictureBoxSizeMode.Zoom,
+                    Image =
+                        MonsterAssetResolver
+                            .TryGetPreloadedMonsterDigimonIcon(
+                                monster?.ModelDigimon ??
+                                0)
+                };
+
+            var name =
+                new Label
+                {
+                    Text =
+                        monster?.DisplayName ??
+                        $"Monster {record.MonsterId}",
+                    ForeColor = CText,
+                    Font =
+                        new Font(
+                            "Segoe UI Semibold",
+                            11.5F,
+                            FontStyle.Bold),
+                    AutoSize = false,
+                    Location =
+                        new Point(
+                            102,
+                            14),
+                    Height = 25,
+                    AutoEllipsis = true
+                };
+
+            var meta =
+                new Label
+                {
+                    Text =
+                        $"Skill_IDX {record.SkillIndex}  •  MonsterID {record.MonsterId}  •  UseTerms {record.UseTerms} ({useTerm.Name})  •  SkillType {record.SkillType}",
+                    ForeColor = CMuted,
+                    Font =
+                        new Font(
+                            "Segoe UI",
+                            8.2F),
+                    AutoSize = false,
+                    Location =
+                        new Point(
+                            102,
+                            43),
+                    Height = 19,
+                    AutoEllipsis = true
+                };
+
+            var detail =
+                new Label
+                {
+                    Text =
+                        $"{useTerm.Description}  •  Cool {record.CoolTime} ms  •  Cast {record.CastTime} ms",
+                    ForeColor =
+                        useTerm.Implemented
+                            ? Color.FromArgb(
+                                115,
+                                225,
+                                145)
+                            : Color.FromArgb(
+                                244,
+                                190,
+                                102),
+                    Font =
+                        new Font(
+                            "Segoe UI",
+                            8.1F),
+                    AutoSize = false,
+                    Location =
+                        new Point(
+                            102,
+                            68),
+                    Height = 20,
+                    AutoEllipsis = true
+                };
+
+            var factors =
+                new Label
+                {
+                    Text =
+                        $"Factors [{record.EffectFactor1}, {record.EffectFactor2}, {record.EffectFactor3}]  •  Values [{record.EffectFactorValue1}, {record.EffectFactorValue2}, {record.EffectFactorValue3}]",
+                    ForeColor =
+                        Color.FromArgb(
+                            155,
+                            155,
+                            155),
+                    Font =
+                        new Font(
+                            "Consolas",
+                            7.1F),
+                    AutoSize = false,
+                    Location =
+                        new Point(
+                            102,
+                            91),
+                    Height = 17,
+                    AutoEllipsis = true
+                };
+
+            var edit =
+                CreateEditorActionButton(
+                    "EDIT");
+
+            edit.Size =
+                new Size(
+                    96,
+                    32);
+
+            var remove =
+                CreateEditorActionButton(
+                    "REMOVE");
+
+            remove.Size =
+                new Size(
+                    96,
+                    32);
+
+            remove.ForeColor =
+                Color.FromArgb(
+                    255,
+                    120,
+                    120);
+
+            void Relayout()
+            {
+                const int rightPadding = 14;
+                const int buttonGap = 8;
+                const int textGap = 16;
+
+                int buttonX =
+                    Math.Max(
+                        104,
+                        card.ClientSize.Width -
+                        edit.Width -
+                        rightPadding);
+
+                edit.Location =
+                    new Point(
+                        buttonX,
+                        20);
+
+                remove.Location =
+                    new Point(
+                        buttonX,
+                        60);
+
+                int textRight =
+                    Math.Max(
+                        150,
+                        buttonX -
+                        textGap);
+
+                int textWidth =
+                    Math.Max(
+                        70,
+                        textRight -
+                        name.Left);
+
+                name.Width =
+                    textWidth;
+
+                meta.Width =
+                    textWidth;
+
+                detail.Width =
+                    textWidth;
+
+                factors.Width =
+                    textWidth;
+            }
+
+            card.Resize +=
+                (_, _) =>
+                    Relayout();
+
+            edit.Click +=
+                (_, _) =>
+                    OpenMonsterSkillEditor(
+                        state,
+                        record.Node,
+                        TryLoadMonsterSkillTermsNear(
+                            state.XmlPath));
+
+            remove.Click +=
+                (_, _) =>
+                {
+                    if (MessageBox.Show(
+                            $"Remover monster skill {record.SkillIndex} de MonsterID {record.MonsterId}?",
+                            "Confirmar",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Warning) !=
+                        DialogResult.Yes)
+                    {
+                        return;
+                    }
+
+                    state.Service.Delete(
+                        record.Node);
+
+                    state.Service.Save();
+
+                    RefreshMonsterSkillBrowser(
+                        state);
+                };
+
+            card.Controls.Add(
+                icon);
+
+            card.Controls.Add(
+                name);
+
+            card.Controls.Add(
+                meta);
+
+            card.Controls.Add(
+                detail);
+
+            card.Controls.Add(
+                factors);
+
+            card.Controls.Add(
+                edit);
+
+            card.Controls.Add(
+                remove);
+
+            // Action buttons must always stay above the text labels.
+            edit.BringToFront();
+            remove.BringToFront();
+
+            Relayout();
+
             return card;
         }
 
@@ -1239,7 +2055,7 @@ namespace DRW_Work_Tool
             {
                 Dock = DockStyle.Fill,
                 BackColor = CEditor,
-                ColumnCount = 2,
+                ColumnCount = 1,
                 RowCount = 1,
                 Margin = Padding.Empty,
                 Padding = Padding.Empty
@@ -1247,9 +2063,6 @@ namespace DRW_Work_Tool
 
             editorLayout.ColumnStyles.Add(
                 new ColumnStyle(SizeType.Percent, 100F));
-
-            editorLayout.ColumnStyles.Add(
-                new ColumnStyle(SizeType.Absolute, 350F));
 
             editorLayout.RowStyles.Add(
                 new RowStyle(SizeType.Percent, 100F));
@@ -1262,17 +2075,42 @@ namespace DRW_Work_Tool
             var close = CreateEditorActionButton("CLOSE");
             close.Size = new Size(110, 34);
             close.Location = new Point(136, 12);
+
+            var viewXml = CreateEditorActionButton("VIEW XML BLOCK");
+            viewXml.Size = new Size(140, 34);
+            viewXml.Location = new Point(256, 12);
+
             var topTitle = new Label
             {
                 Text = "Monster Skill Mechanics Editor",
                 ForeColor = CText,
                 Font = new Font("Segoe UI Semibold", 12F, FontStyle.Bold),
-                AutoSize = true,
-                Location = new Point(270, 17)
+                AutoSize = false,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Location = new Point(414, 12),
+                Height = 34,
+                AutoEllipsis = true
             };
+
+            void LayoutMonsterSkillTopBar()
+            {
+                topTitle.Width =
+                    Math.Max(
+                        80,
+                        topBar.ClientSize.Width -
+                        topTitle.Left -
+                        16);
+            }
+
+            topBar.Resize +=
+                (_, _) => LayoutMonsterSkillTopBar();
+
             topBar.Controls.Add(save);
             topBar.Controls.Add(close);
+            topBar.Controls.Add(viewXml);
             topBar.Controls.Add(topTitle);
+
+            LayoutMonsterSkillTopBar();
 
             var scroll = new Panel { Dock = DockStyle.Fill, BackColor = CEditor, AutoScroll = true, Padding = new Padding(16, 12, 16, 16) };
             DarkUi.ApplyDarkScrollBar(scroll);
@@ -1291,11 +2129,15 @@ namespace DRW_Work_Tool
             {
                 form.Width =
                     Math.Max(
-                        440,
+                        360,
                         scroll.ClientSize.Width -
                         scroll.Padding.Horizontal -
                         SystemInformation.VerticalScrollBarWidth -
                         20);
+
+                ApplyResponsiveMonsterSkillEditorLayout(
+                    form,
+                    form.Width);
             }
 
             scroll.Resize +=
@@ -1306,44 +2148,8 @@ namespace DRW_Work_Tool
             left.Controls.Add(scroll);
             left.Controls.Add(topBar);
 
-            var right = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(19, 19, 19), Padding = new Padding(12) };
-            var xmlTitle = new Label
-            {
-                Text = "LIVE XML PREVIEW",
-                ForeColor = CText,
-                Font = new Font("Segoe UI Semibold", 10F, FontStyle.Bold),
-                Dock = DockStyle.Top,
-                Height = 26
-            };
-            var xml = new RichTextBox
-            {
-                Dock = DockStyle.Fill,
-                BackColor = Color.FromArgb(14, 14, 14),
-                ForeColor = Color.FromArgb(210, 210, 210),
-                BorderStyle = BorderStyle.None,
-                Font = new Font("Consolas", 9.2F),
-                ReadOnly = true
-            };
-            right.Controls.Add(xml);
-            right.Controls.Add(xmlTitle);
             editorLayout.Controls.Add(left, 0, 0);
-            editorLayout.Controls.Add(right, 1, 0);
             page.Controls.Add(editorLayout);
-
-            void UpdateMonsterSkillEditorColumns()
-            {
-                int available = Math.Max(1, editorLayout.ClientSize.Width);
-
-                editorLayout.ColumnStyles[1].Width =
-                    available < 800
-                        ? Math.Max(230F, available * 0.33F)
-                        : 350F;
-            }
-
-            editorLayout.Resize +=
-                (_, _) => UpdateMonsterSkillEditorColumns();
-
-            UpdateMonsterSkillEditorColumns();
 
             var headerCard = new Panel
             {
@@ -1430,6 +2236,7 @@ namespace DRW_Work_Tool
                 Service = browse.Service,
                 Monsters = browse.Monsters,
                 Buffs = browse.Buffs,
+                TalkMessages = browse.TalkMessages,
                 Terms = terms,
                 Working = skillNode,
                 Editors = editors,
@@ -1441,7 +2248,6 @@ namespace DRW_Work_Tool
                 Factor1Label = new Label(),
                 Factor2Label = new Label(),
                 Factor3Label = new Label(),
-                XmlPreview = xml,
                 RefreshBrowser = () => RefreshMonsterSkillBrowser(browse)
             };
 
@@ -1452,6 +2258,10 @@ namespace DRW_Work_Tool
             AddMonsterSkillFactorSection(form, state, "Eff_Factor2", "Eff_Fact_Val2", "Factor 2", state.Factor2Label);
             AddMonsterSkillFactorSection(form, state, "Eff_Factor3", "Eff_Fact_Val3", "Factor 3", state.Factor3Label);
             AddMonsterSkillExtraSection(form, state);
+
+            ApplyResponsiveMonsterSkillEditorLayout(
+                form,
+                form.Width);
 
             void RefreshView()
             {
@@ -1476,7 +2286,6 @@ namespace DRW_Work_Tool
                 state.Factor1Label.Text = BuildFactorSummary(state, IntValue(skillNode, "Eff_Factor"), "Eff_Factor");
                 state.Factor2Label.Text = BuildFactorSummary(state, IntValue(skillNode, "Eff_Factor2"), "Eff_Factor2");
                 state.Factor3Label.Text = BuildFactorSummary(state, IntValue(skillNode, "Eff_Factor3"), "Eff_Factor3");
-                xml.Text = skillNode.ToString();
             }
 
             foreach (Control control in state.Editors.Values)
@@ -1493,13 +2302,37 @@ namespace DRW_Work_Tool
             }
             RefreshView();
 
+            viewXml.Click +=
+                (_, _) =>
+                    OpenMonsterSkillXmlPreviewTab(
+                        browse.XmlPath,
+                        skillNode);
+
             save.Click += (_, _) =>
             {
+                if (!ValidateMonsterSkillBeforeSave(
+                        state,
+                        out string validationError))
+                {
+                    MessageBox.Show(
+                        validationError,
+                        "Monster Skill Editor",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+
+                    return;
+                }
+
                 state.Service.Save();
                 state.Dirty = false;
                 state.RefreshBrowser?.Invoke();
                 RefreshView();
-                MessageBox.Show("MonstersSkill.xml guardado com sucesso.", "Monster Skill Editor", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                MessageBox.Show(
+                    "MonstersSkill.xml guardado com sucesso.",
+                    "Monster Skill Editor",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
             };
             close.Click += (_, _) =>
             {
@@ -2264,64 +3097,951 @@ namespace DRW_Work_Tool
             host.Controls.Add(section);
         }
 
-        private void AddMonsterSkillCoreSection(FlowLayoutPanel host, MonsterSkillEditState state)
+        private static void ApplyResponsiveMonsterSkillEditorLayout(
+            FlowLayoutPanel form,
+            int availableWidth)
         {
-            var section = CreateEditorSection("CORE", "Main identity, owner monster and mechanic type.");
-            AddBoundTextField(section, state.Editors, state.Working, "Skill_IDX", "Skill IDX", 160);
+            int contentWidth =
+                Math.Max(
+                    330,
+                    availableWidth -
+                    4);
 
-            var monsterCard = CreateFieldHost("Monster ID", "Owner monster that can cast this skill.", 330, 94);
-            var monsterText = CreateBoundTextBox(state.Working, "MonsterID");
-            monsterText.Width = 110;
-            monsterText.Location = new Point(14, 52);
-            state.Editors["MonsterID"] = monsterText;
-            monsterCard.Controls.Add(monsterText);
-            var selectMonster = CreateEditorActionButton("SELECT MONSTER");
-            selectMonster.Size = new Size(130, 28);
-            selectMonster.Location = new Point(132, 48);
-            selectMonster.Click += (_, _) =>
-            {
-                MonsterRecord? selected = ShowMonsterReferencePicker(state.Monsters, UIntValue(state.Working, "MonsterID"));
-                if (selected == null)
-                    return;
-                monsterText.Text = selected.MonsterId.ToString();
-            };
-            monsterCard.Controls.Add(selectMonster);
-            section.Controls.Add(monsterCard);
+            form.SuspendLayout();
 
-            var useTermCard = CreateFieldHost("UseTerms", "Behavior/mechanics type. Includes server implementation notes.", 330, 94);
-            var useTermCombo = new ComboBox
+            foreach (Control control in
+                     form.Controls.Cast<Control>())
             {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(16, 16, 16),
-                ForeColor = CText,
-                Font = new Font("Segoe UI", 9F),
-                Location = new Point(14, 49),
-                Size = new Size(294, 28)
-            };
-            HashSet<int> values = new(MonsterUseTermCatalog.All.Select(x => x.Value)) { IntValue(state.Working, "UseTerms"), 0 };
-            foreach (int value in values.OrderBy(x => x))
-            {
-                UseTermInfo info = MonsterUseTermCatalog.Get(value);
-                useTermCombo.Items.Add(new ComboOption(value, $"{value} - {info.Name}"));
-            }
-            for (int i = 0; i < useTermCombo.Items.Count; i++)
-            {
-                if (useTermCombo.Items[i] is ComboOption item && item.Value == IntValue(state.Working, "UseTerms"))
+                if (control is not FlowLayoutPanel section)
                 {
-                    useTermCombo.SelectedIndex = i;
+                    if (control is Panel simpleCard)
+                    {
+                        simpleCard.Width =
+                            contentWidth;
+
+                        foreach (Label label in
+                                 simpleCard.Controls
+                                     .OfType<Label>())
+                        {
+                            label.Width =
+                                Math.Max(
+                                    80,
+                                    simpleCard.ClientSize.Width -
+                                    label.Left -
+                                    14);
+                        }
+                    }
+
+                    continue;
+                }
+
+                section.SuspendLayout();
+
+                section.Width =
+                    contentWidth;
+
+                int inner =
+                    Math.Max(
+                        280,
+                        section.ClientSize.Width -
+                        section.Padding.Horizontal -
+                        6);
+
+                foreach (Label label in
+                         section.Controls
+                             .OfType<Label>())
+                {
+                    label.Width =
+                        inner;
+                }
+
+                List<Panel> fields =
+                    section.Controls
+                        .OfType<Panel>()
+                        .ToList();
+
+                bool twoColumns =
+                    inner >= 700;
+
+                int fieldWidth =
+                    twoColumns
+                        ? Math.Max(
+                            280,
+                            (inner - 12) / 2)
+                        : inner;
+
+                foreach (Panel field in fields)
+                {
+                    field.Width =
+                        fieldWidth;
+
+                    if (string.Equals(
+                            field.Tag as string,
+                            "MonsterSkillSpecialField",
+                            StringComparison.Ordinal))
+                    {
+                        field.PerformLayout();
+                        continue;
+                    }
+
+                    foreach (TextBox box in
+                             field.Controls
+                                 .OfType<TextBox>())
+                    {
+                        box.Width =
+                            Math.Max(
+                                90,
+                                field.ClientSize.Width -
+                                box.Left -
+                                14);
+                    }
+
+                    foreach (ComboBox combo in
+                             field.Controls
+                                 .OfType<ComboBox>())
+                    {
+                        combo.Width =
+                            Math.Max(
+                                90,
+                                field.ClientSize.Width -
+                                combo.Left -
+                                14);
+                    }
+
+                    foreach (Label label in
+                             field.Controls
+                                 .OfType<Label>())
+                    {
+                        label.Width =
+                            Math.Max(
+                                80,
+                                field.ClientSize.Width -
+                                label.Left -
+                                14);
+                    }
+                }
+
+                section.ResumeLayout(
+                    true);
+            }
+
+            form.ResumeLayout(
+                true);
+        }
+
+        private bool ValidateMonsterSkillBeforeSave(
+            MonsterSkillEditState state,
+            out string error)
+        {
+            error =
+                string.Empty;
+
+            if (!uint.TryParse(
+                    state.Working.Element("Skill_IDX")?.Value,
+                    out uint skillIndex) ||
+                skillIndex == 0)
+            {
+                error =
+                    "Skill_IDX must be a positive numeric value.";
+
+                return false;
+            }
+
+            bool duplicate =
+                state.Service.Root
+                    .Elements("MonsterSkill")
+                    .Any(
+                        node =>
+                            !ReferenceEquals(
+                                node,
+                                state.Working) &&
+                            UIntValue(
+                                node,
+                                "Skill_IDX") ==
+                            skillIndex);
+
+            if (duplicate)
+            {
+                error =
+                    $"Skill_IDX {skillIndex} already exists in MonstersSkill.xml.";
+
+                return false;
+            }
+
+            uint monsterId =
+                UIntValue(
+                    state.Working,
+                    "MonsterID");
+
+            if (monsterId != 0 &&
+                state.Monsters.Find(
+                    monsterId) ==
+                null)
+            {
+                error =
+                    $"MonsterID {monsterId} was not found in Monster.xml. Use SELECT MONSTER.";
+
+                return false;
+            }
+
+            uint talkId =
+                UIntValue(
+                    state.Working,
+                    "TalkID");
+
+            if (talkId != 0 &&
+                state.TalkMessages.Find(
+                    talkId) ==
+                null)
+            {
+                error =
+                    $"TalkID {talkId} was not found in TalkMessage.xml. Use SELECT MESSAGE.";
+
+                return false;
+            }
+
+            return true;
+        }
+
+        private void OpenMonsterSkillXmlPreviewTab(
+            string xmlPath,
+            XElement skillNode)
+        {
+            uint skillIndex =
+                UIntValue(
+                    skillNode,
+                    "Skill_IDX");
+
+            string key =
+                Path.GetFullPath(xmlPath) +
+                $"#MonsterSkillXml#{skillIndex}";
+
+            TabPage? existing =
+                editorTabs.TabPages
+                    .Cast<TabPage>()
+                    .FirstOrDefault(
+                        tab =>
+                            string.Equals(
+                                tab.Name,
+                                key,
+                                StringComparison.OrdinalIgnoreCase));
+
+            if (existing != null)
+            {
+                RichTextBox? existingBox =
+                    existing.Controls
+                        .Find(
+                            "MonsterSkillXmlPreviewBox",
+                            true)
+                        .OfType<RichTextBox>()
+                        .FirstOrDefault();
+
+                if (existingBox != null)
+                {
+                    existingBox.Text =
+                        skillNode.ToString();
+                }
+
+                existing.Text =
+                    $"MonsterSkill {skillIndex} XML";
+
+                editorTabs.SelectedTab =
+                    existing;
+
+                return;
+            }
+
+            var page =
+                CreateDarkTab(
+                    $"MonsterSkill {skillIndex} XML");
+
+            page.Name =
+                key;
+
+            var top =
+                new Panel
+                {
+                    Dock = DockStyle.Top,
+                    Height = 54,
+                    BackColor =
+                        Color.FromArgb(
+                            25,
+                            25,
+                            25)
+                };
+
+            var title =
+                new Label
+                {
+                    Text =
+                        $"MonsterSkill {skillIndex} — XML Block",
+                    ForeColor = CText,
+                    Font =
+                        new Font(
+                            "Segoe UI Semibold",
+                            11F,
+                            FontStyle.Bold),
+                    Location =
+                        new Point(
+                            16,
+                            15),
+                    AutoSize = false,
+                    Height = 28,
+                    AutoEllipsis = true
+                };
+
+            var refresh =
+                CreateEditorActionButton(
+                    "REFRESH");
+
+            refresh.Size =
+                new Size(
+                    100,
+                    32);
+
+            var close =
+                CreateEditorActionButton(
+                    "CLOSE");
+
+            close.Size =
+                new Size(
+                    100,
+                    32);
+
+            var xml =
+                new RichTextBox
+                {
+                    Name =
+                        "MonsterSkillXmlPreviewBox",
+                    Dock = DockStyle.Fill,
+                    ReadOnly = true,
+                    BackColor =
+                        Color.FromArgb(
+                            14,
+                            14,
+                            14),
+                    ForeColor =
+                        Color.FromArgb(
+                            220,
+                            220,
+                            220),
+                    BorderStyle =
+                        BorderStyle.None,
+                    Font =
+                        new Font(
+                            "Consolas",
+                            9.5F),
+                    DetectUrls = false,
+                    WordWrap = false,
+                    ScrollBars =
+                        RichTextBoxScrollBars.Both,
+                    Text =
+                        skillNode.ToString()
+                };
+
+            void LayoutTop()
+            {
+                close.Location =
+                    new Point(
+                        Math.Max(
+                            0,
+                            top.ClientSize.Width -
+                            close.Width -
+                            14),
+                        10);
+
+                refresh.Location =
+                    new Point(
+                        Math.Max(
+                            0,
+                            close.Left -
+                            refresh.Width -
+                            8),
+                        10);
+
+                title.Width =
+                    Math.Max(
+                        80,
+                        refresh.Left -
+                        title.Left -
+                        10);
+            }
+
+            refresh.Click +=
+                (_, _) =>
+                    xml.Text =
+                        skillNode.ToString();
+
+            close.Click +=
+                (_, _) =>
+                {
+                    editorTabs.TabPages.Remove(
+                        page);
+
+                    page.Dispose();
+                };
+
+            top.Resize +=
+                (_, _) =>
+                    LayoutTop();
+
+            top.Controls.Add(
+                title);
+
+            top.Controls.Add(
+                refresh);
+
+            top.Controls.Add(
+                close);
+
+            page.Controls.Add(
+                xml);
+
+            page.Controls.Add(
+                top);
+
+            editorTabs.TabPages.Add(
+                page);
+
+            editorTabs.SelectedTab =
+                page;
+
+            LayoutTop();
+        }
+
+        private void AddMonsterSkillCoreSection(
+            FlowLayoutPanel host,
+            MonsterSkillEditState state)
+        {
+            var section =
+                CreateEditorSection(
+                    "CORE",
+                    "Main identity, owner Monster.xml reference and mechanic type.");
+
+            // -------------------------------------------------------------
+            // Skill_IDX - unique validation + suggested free ID
+            // -------------------------------------------------------------
+            var skillCard =
+                CreateFieldHost(
+                    "Skill IDX",
+                    "Must be a unique positive Skill_IDX in MonstersSkill.xml.",
+                    420,
+                    116);
+
+            skillCard.Tag =
+                "MonsterSkillSpecialField";
+
+            var skillText =
+                CreateBoundTextBox(
+                    state.Working,
+                    "Skill_IDX");
+
+            skillText.Location =
+                new Point(
+                    14,
+                    50);
+
+            var skillStatus =
+                new Label
+                {
+                    Location =
+                        new Point(
+                            14,
+                            79),
+                    Height = 22,
+                    ForeColor = CMuted,
+                    Font =
+                        new Font(
+                            "Segoe UI Semibold",
+                            7.8F),
+                    AutoEllipsis = true
+                };
+
+            var useSuggested =
+                CreateEditorActionButton(
+                    "USE SUGGESTED");
+
+            useSuggested.Size =
+                new Size(
+                    112,
+                    27);
+
+            useSuggested.Visible =
+                false;
+
+            uint SuggestedSkillIndex()
+            {
+                HashSet<uint> used =
+                    state.Service.Root
+                        .Elements("MonsterSkill")
+                        .Where(
+                            node =>
+                                !ReferenceEquals(
+                                    node,
+                                    state.Working))
+                        .Select(
+                            node =>
+                                UIntValue(
+                                    node,
+                                    "Skill_IDX"))
+                        .Where(
+                            value =>
+                                value != 0)
+                        .ToHashSet();
+
+                uint candidate =
+                    used.Count == 0
+                        ? 1u
+                        : used.Max() + 1u;
+
+                while (candidate < uint.MaxValue &&
+                       used.Contains(candidate))
+                {
+                    candidate++;
+                }
+
+                return candidate;
+            }
+
+            void LayoutSkillCard()
+            {
+                int right =
+                    skillCard.ClientSize.Width -
+                    14;
+
+                skillText.Width =
+                    Math.Max(
+                        90,
+                        right -
+                        skillText.Left);
+
+                if (useSuggested.Visible)
+                {
+                    useSuggested.Location =
+                        new Point(
+                            Math.Max(
+                                150,
+                                right -
+                                useSuggested.Width),
+                            75);
+
+                    skillStatus.Width =
+                        Math.Max(
+                            80,
+                            useSuggested.Left -
+                            skillStatus.Left -
+                            8);
+                }
+                else
+                {
+                    skillStatus.Width =
+                        Math.Max(
+                            80,
+                            right -
+                            skillStatus.Left);
+                }
+            }
+
+            void ValidateSkillIndex()
+            {
+                if (!uint.TryParse(
+                        skillText.Text.Trim(),
+                        out uint id) ||
+                    id == 0)
+                {
+                    uint suggested =
+                        SuggestedSkillIndex();
+
+                    skillStatus.Text =
+                        $"INVALID ID  •  Suggested: {suggested}";
+
+                    skillStatus.ForeColor =
+                        Color.FromArgb(
+                            255,
+                            95,
+                            95);
+
+                    useSuggested.Text =
+                        $"USE {suggested}";
+
+                    useSuggested.Tag =
+                        suggested;
+
+                    useSuggested.Visible =
+                        true;
+
+                    LayoutSkillCard();
+                    return;
+                }
+
+                bool duplicate =
+                    state.Service.Root
+                        .Elements("MonsterSkill")
+                        .Any(
+                            node =>
+                                !ReferenceEquals(
+                                    node,
+                                    state.Working) &&
+                                UIntValue(
+                                    node,
+                                    "Skill_IDX") ==
+                                id);
+
+                if (duplicate)
+                {
+                    uint suggested =
+                        SuggestedSkillIndex();
+
+                    skillStatus.Text =
+                        $"ID ALREADY USED  •  Suggested: {suggested}";
+
+                    skillStatus.ForeColor =
+                        Color.FromArgb(
+                            255,
+                            95,
+                            95);
+
+                    useSuggested.Text =
+                        $"USE {suggested}";
+
+                    useSuggested.Tag =
+                        suggested;
+
+                    useSuggested.Visible =
+                        true;
+                }
+                else
+                {
+                    skillStatus.Text =
+                        $"VALID ID  •  {id} is available";
+
+                    skillStatus.ForeColor =
+                        Color.FromArgb(
+                            125,
+                            220,
+                            140);
+
+                    useSuggested.Visible =
+                        false;
+                }
+
+                LayoutSkillCard();
+            }
+
+            skillText.TextChanged +=
+                (_, _) =>
+                {
+                    state.Dirty = true;
+                    ValidateSkillIndex();
+                };
+
+            useSuggested.Click +=
+                (_, _) =>
+                {
+                    if (useSuggested.Tag is uint suggested)
+                    {
+                        skillText.Text =
+                            suggested.ToString();
+                    }
+                };
+
+            skillCard.Resize +=
+                (_, _) =>
+                    LayoutSkillCard();
+
+            skillCard.Controls.Add(
+                skillText);
+
+            skillCard.Controls.Add(
+                skillStatus);
+
+            skillCard.Controls.Add(
+                useSuggested);
+
+            state.Editors["Skill_IDX"] =
+                skillText;
+
+            LayoutSkillCard();
+            ValidateSkillIndex();
+
+            section.Controls.Add(
+                skillCard);
+
+            // -------------------------------------------------------------
+            // MonsterID - select directly from Monster.xml
+            // -------------------------------------------------------------
+            var monsterCard =
+                CreateFieldHost(
+                    "Monster ID",
+                    "Owner monster. SELECT MONSTER reads the already-loaded Monster.xml catalog.",
+                    420,
+                    132);
+
+            monsterCard.Tag =
+                "MonsterSkillSpecialField";
+
+            var monsterText =
+                CreateBoundTextBox(
+                    state.Working,
+                    "MonsterID");
+
+            monsterText.Location =
+                new Point(
+                    14,
+                    50);
+
+            var selectMonster =
+                CreateEditorActionButton(
+                    "SELECT MONSTER");
+
+            selectMonster.Size =
+                new Size(
+                    130,
+                    28);
+
+            var monsterInfo =
+                new Label
+                {
+                    ForeColor = CMuted,
+                    Font =
+                        new Font(
+                            "Segoe UI",
+                            7.6F),
+                    Location =
+                        new Point(
+                            14,
+                            82),
+                    Height = 36,
+                    AutoEllipsis = true
+                };
+
+            void LayoutMonsterCard()
+            {
+                int right =
+                    monsterCard.ClientSize.Width -
+                    14;
+
+                selectMonster.Location =
+                    new Point(
+                        Math.Max(
+                            160,
+                            right -
+                            selectMonster.Width),
+                        47);
+
+                monsterText.Width =
+                    Math.Max(
+                        90,
+                        selectMonster.Left -
+                        monsterText.Left -
+                        10);
+
+                monsterInfo.Width =
+                    Math.Max(
+                        100,
+                        right -
+                        monsterInfo.Left);
+            }
+
+            void RefreshMonsterInfo()
+            {
+                uint monsterId =
+                    UIntValue(
+                        state.Working,
+                        "MonsterID");
+
+                MonsterRecord? monster =
+                    state.Monsters.Find(
+                        monsterId);
+
+                if (monster == null)
+                {
+                    monsterInfo.Text =
+                        monsterId == 0
+                            ? "No Monster selected."
+                            : $"MonsterID {monsterId} was not found in Monster.xml.";
+
+                    monsterInfo.ForeColor =
+                        Color.FromArgb(
+                            255,
+                            120,
+                            120);
+                }
+                else
+                {
+                    monsterInfo.Text =
+                        $"{monster.DisplayName}  •  MonsterID {monster.MonsterId}  •  ModelDigimon {monster.ModelDigimon}  •  Lv {monster.Level}";
+
+                    monsterInfo.ForeColor =
+                        Color.FromArgb(
+                            125,
+                            220,
+                            140);
+                }
+            }
+
+            monsterText.TextChanged +=
+                (_, _) =>
+                {
+                    state.Dirty = true;
+                    RefreshMonsterInfo();
+                };
+
+            selectMonster.Click +=
+                (_, _) =>
+                {
+                    MonsterRecord? selected =
+                        ShowMonsterReferencePicker(
+                            state.Monsters,
+                            UIntValue(
+                                state.Working,
+                                "MonsterID"));
+
+                    if (selected == null)
+                        return;
+
+                    monsterText.Text =
+                        selected.MonsterId.ToString();
+                };
+
+            monsterCard.Resize +=
+                (_, _) =>
+                    LayoutMonsterCard();
+
+            monsterCard.Controls.Add(
+                monsterText);
+
+            monsterCard.Controls.Add(
+                selectMonster);
+
+            monsterCard.Controls.Add(
+                monsterInfo);
+
+            state.Editors["MonsterID"] =
+                monsterText;
+
+            LayoutMonsterCard();
+            RefreshMonsterInfo();
+
+            section.Controls.Add(
+                monsterCard);
+
+            // -------------------------------------------------------------
+            // UseTerms
+            // -------------------------------------------------------------
+            var useTermCard =
+                CreateFieldHost(
+                    "UseTerms",
+                    "Behavior/mechanics type. Includes server implementation notes.",
+                    420,
+                    94);
+
+            var useTermCombo =
+                new ComboBox
+                {
+                    DropDownStyle =
+                        ComboBoxStyle.DropDownList,
+                    FlatStyle =
+                        FlatStyle.Flat,
+                    BackColor =
+                        Color.FromArgb(
+                            16,
+                            16,
+                            16),
+                    ForeColor = CText,
+                    Font =
+                        new Font(
+                            "Segoe UI",
+                            9F),
+                    Location =
+                        new Point(
+                            14,
+                            49)
+                };
+
+            void LayoutUseTerm()
+            {
+                useTermCombo.Width =
+                    Math.Max(
+                        100,
+                        useTermCard.ClientSize.Width -
+                        28);
+            }
+
+            HashSet<int> values =
+                new(
+                    MonsterUseTermCatalog.All
+                        .Select(
+                            x =>
+                                x.Value))
+                {
+                    IntValue(
+                        state.Working,
+                        "UseTerms"),
+                    0
+                };
+
+            foreach (int value in
+                     values.OrderBy(
+                         x =>
+                             x))
+            {
+                UseTermInfo info =
+                    MonsterUseTermCatalog.Get(
+                        value);
+
+                useTermCombo.Items.Add(
+                    new ComboOption(
+                        value,
+                        $"{value} - {info.Name}"));
+            }
+
+            for (int i = 0;
+                 i < useTermCombo.Items.Count;
+                 i++)
+            {
+                if (useTermCombo.Items[i] is ComboOption item &&
+                    item.Value ==
+                    IntValue(
+                        state.Working,
+                        "UseTerms"))
+                {
+                    useTermCombo.SelectedIndex =
+                        i;
+
                     break;
                 }
             }
-            useTermCombo.SelectedIndexChanged += (_, _) =>
-            {
-                if (useTermCombo.SelectedItem is ComboOption chosen)
-                    SetElementValue(state.Working, "UseTerms", chosen.Value.ToString());
-            };
-            state.Editors["UseTerms"] = useTermCombo;
-            useTermCard.Controls.Add(useTermCombo);
-            section.Controls.Add(useTermCard);
-            host.Controls.Add(section);
+
+            useTermCombo.SelectedIndexChanged +=
+                (_, _) =>
+                {
+                    if (useTermCombo.SelectedItem is ComboOption chosen)
+                    {
+                        SetElementValue(
+                            state.Working,
+                            "UseTerms",
+                            chosen.Value.ToString());
+                    }
+                };
+
+            useTermCard.Resize +=
+                (_, _) =>
+                    LayoutUseTerm();
+
+            state.Editors["UseTerms"] =
+                useTermCombo;
+
+            useTermCard.Controls.Add(
+                useTermCombo);
+
+            LayoutUseTerm();
+
+            section.Controls.Add(
+                useTermCard);
+
+            host.Controls.Add(
+                section);
         }
 
         private void AddMonsterSkillCombatSection(FlowLayoutPanel host, MonsterSkillEditState state)
@@ -2340,65 +4060,803 @@ namespace DRW_Work_Tool
             host.Controls.Add(section);
         }
 
-        private void AddMonsterSkillFactorSection(FlowLayoutPanel host, MonsterSkillEditState state, string factorField, string valueField, string title, Label summaryLabel)
+        private void AddMonsterSkillFactorSection(
+            FlowLayoutPanel host,
+            MonsterSkillEditState state,
+            string factorField,
+            string valueField,
+            string title,
+            Label summaryLabel)
         {
-            var section = CreateEditorSection(title, "Helper pickers for summoned mobs or Buff/Debuff references. Raw values are still fully editable.");
+            var section =
+                CreateEditorSection(
+                    title,
+                    "Helper pickers for summoned mobs or Buff/Debuff references. Raw values are still fully editable.");
 
-            var factorCard = CreateFieldHost($"{title} raw reference", "Raw XML field plus helper buttons.", 420, 116);
-            var factorText = CreateBoundTextBox(state.Working, factorField);
-            factorText.Width = 110;
-            factorText.Location = new Point(14, 52);
-            state.Editors[factorField] = factorText;
-            factorCard.Controls.Add(factorText);
+            var factorCard =
+                CreateFieldHost(
+                    $"{title} raw reference",
+                    "Raw XML field plus helper buttons.",
+                    520,
+                    154);
 
-            var selectMob = CreateEditorActionButton("SELECT MOB");
-            selectMob.Size = new Size(118, 28);
-            selectMob.Location = new Point(132, 48);
-            selectMob.Click += (_, _) =>
+            // The generic responsive field pass must not stretch the raw
+            // TextBox underneath the SELECT buttons.
+            factorCard.Tag =
+                "MonsterSkillSpecialField";
+
+            var factorText =
+                CreateBoundTextBox(
+                    state.Working,
+                    factorField);
+
+            factorText.Location =
+                new Point(
+                    14,
+                    50);
+
+            factorText.Height =
+                24;
+
+            state.Editors[factorField] =
+                factorText;
+
+            var selectMob =
+                CreateEditorActionButton(
+                    "SELECT MOB");
+
+            selectMob.Size =
+                new Size(
+                    118,
+                    28);
+
+            var selectBuff =
+                CreateEditorActionButton(
+                    "SELECT BUFF/DEBUFF");
+
+            selectBuff.Size =
+                new Size(
+                    154,
+                    28);
+
+            summaryLabel.ForeColor =
+                Color.FromArgb(
+                    125,
+                    210,
+                    145);
+
+            summaryLabel.Font =
+                new Font(
+                    "Segoe UI",
+                    8.1F);
+
+            summaryLabel.AutoSize =
+                false;
+
+            summaryLabel.Height =
+                22;
+
+            summaryLabel.AutoEllipsis =
+                true;
+
+            void LayoutFactorCard()
             {
-                MonsterRecord? selected = ShowMonsterReferencePicker(state.Monsters, (uint)Math.Max(0, IntValue(state.Working, factorField)));
-                if (selected == null)
-                    return;
-                factorText.Text = selected.MonsterId.ToString();
-            };
-            factorCard.Controls.Add(selectMob);
+                int right =
+                    factorCard.ClientSize.Width -
+                    14;
 
-            var selectBuff = CreateEditorActionButton("SELECT BUFF/DEBUFF");
-            selectBuff.Size = new Size(154, 28);
-            selectBuff.Location = new Point(256, 48);
-            selectBuff.Click += (_, _) =>
-            {
-                if (state.Buffs == null)
+                factorText.Width =
+                    Math.Max(
+                        120,
+                        right -
+                        factorText.Left);
+
+                // Buttons get their own line so they can never be covered by
+                // the raw-reference textbox or clipped by a narrow section.
+                selectMob.Location =
+                    new Point(
+                        14,
+                        82);
+
+                selectBuff.Location =
+                    new Point(
+                        selectMob.Right +
+                        8,
+                        82);
+
+                // On very narrow layouts, keep the wider second button inside
+                // the card instead of allowing it to enter the scrollbar area.
+                if (selectBuff.Right >
+                    right)
                 {
-                    MessageBox.Show("Buff.xml não foi encontrado no workspace atual.", "Buff Picker", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return;
+                    int available =
+                        Math.Max(
+                            120,
+                            right -
+                            selectBuff.Left);
+
+                    selectBuff.Width =
+                        available;
                 }
-                BuffMiniRecord? selected = ShowBuffReferencePicker(state.Buffs, (uint)Math.Max(0, IntValue(state.Working, factorField)));
-                if (selected == null)
-                    return;
-                factorText.Text = selected.Id.ToString();
-            };
-            factorCard.Controls.Add(selectBuff);
+                else
+                {
+                    selectBuff.Width =
+                        154;
+                }
 
-            summaryLabel.ForeColor = Color.FromArgb(125, 210, 145);
-            summaryLabel.Font = new Font("Segoe UI", 8.3F);
-            summaryLabel.AutoSize = false;
-            summaryLabel.Location = new Point(14, 82);
-            summaryLabel.Size = new Size(392, 24);
-            summaryLabel.AutoEllipsis = true;
-            factorCard.Controls.Add(summaryLabel);
-            section.Controls.Add(factorCard);
+                summaryLabel.Location =
+                    new Point(
+                        14,
+                        116);
 
-            AddBoundTextField(section, state.Editors, state.Working, valueField, $"{title} value / timer", 180);
-            host.Controls.Add(section);
+                summaryLabel.Width =
+                    Math.Max(
+                        100,
+                        right -
+                        summaryLabel.Left);
+            }
+
+            selectMob.Click +=
+                (_, _) =>
+                {
+                    MonsterRecord? selected =
+                        ShowMonsterReferencePicker(
+                            state.Monsters,
+                            (uint)Math.Max(
+                                0,
+                                IntValue(
+                                    state.Working,
+                                    factorField)));
+
+                    if (selected == null)
+                        return;
+
+                    factorText.Text =
+                        selected.MonsterId.ToString();
+                };
+
+            selectBuff.Click +=
+                (_, _) =>
+                {
+                    if (state.Buffs == null)
+                    {
+                        MessageBox.Show(
+                            "Buff.xml não foi encontrado no workspace atual.",
+                            "Buff Picker",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information);
+
+                        return;
+                    }
+
+                    BuffMiniRecord? selected =
+                        ShowBuffReferencePicker(
+                            state.Buffs,
+                            (uint)Math.Max(
+                                0,
+                                IntValue(
+                                    state.Working,
+                                    factorField)));
+
+                    if (selected == null)
+                        return;
+
+                    factorText.Text =
+                        selected.Id.ToString();
+                };
+
+            factorCard.Resize +=
+                (_, _) =>
+                    LayoutFactorCard();
+
+            factorCard.Controls.Add(
+                factorText);
+
+            factorCard.Controls.Add(
+                selectMob);
+
+            factorCard.Controls.Add(
+                selectBuff);
+
+            factorCard.Controls.Add(
+                summaryLabel);
+
+            LayoutFactorCard();
+
+            section.Controls.Add(
+                factorCard);
+
+            AddBoundTextField(
+                section,
+                state.Editors,
+                state.Working,
+                valueField,
+                $"{title} value / timer",
+                180);
+
+            host.Controls.Add(
+                section);
         }
 
-        private void AddMonsterSkillExtraSection(FlowLayoutPanel host, MonsterSkillEditState state)
+        private void AddMonsterSkillExtraSection(
+            FlowLayoutPanel host,
+            MonsterSkillEditState state)
         {
-            var section = CreateEditorSection("EXTRA", "Talk, activation and warning effect fields.");
-            foreach (string field in new[] { "TalkID", "Activetype", "NoticeTime", "NoticeEffname", "unk" })
-                AddBoundTextField(section, state.Editors, state.Working, field, FriendlyFieldName(field), field == "NoticeEffname" ? 320 : 160);
-            host.Controls.Add(section);
+            var section =
+                CreateEditorSection(
+                    "EXTRA / TALK",
+                    "TalkID is resolved from TalkMessage.xml, including game color markup.");
+
+            var talkCard =
+                CreateFieldHost(
+                    "Talk ID",
+                    "Select a TalkMessage.xml record and preview its formatted message.",
+                    620,
+                    188);
+
+            talkCard.Tag =
+                "MonsterSkillSpecialField";
+
+            var talkText =
+                CreateBoundTextBox(
+                    state.Working,
+                    "TalkID");
+
+            talkText.Location =
+                new Point(
+                    14,
+                    50);
+
+            var selectTalk =
+                CreateEditorActionButton(
+                    "SELECT MESSAGE");
+
+            selectTalk.Size =
+                new Size(
+                    132,
+                    28);
+
+            var talkInfo =
+                new Label
+                {
+                    ForeColor = CMuted,
+                    Font =
+                        new Font(
+                            "Segoe UI",
+                            7.5F),
+                    Location =
+                        new Point(
+                            14,
+                            82),
+                    Height = 18,
+                    AutoEllipsis = true
+                };
+
+            var talkPreview =
+                new RichTextBox
+                {
+                    ReadOnly = true,
+                    BorderStyle =
+                        BorderStyle.FixedSingle,
+                    BackColor =
+                        Color.FromArgb(
+                            12,
+                            12,
+                            12),
+                    ForeColor = CText,
+                    Font =
+                        new Font(
+                            "Segoe UI",
+                            8.5F),
+                    Location =
+                        new Point(
+                            14,
+                            104),
+                    Height = 64,
+                    DetectUrls = false,
+                    ScrollBars =
+                        RichTextBoxScrollBars.Vertical
+                };
+
+            void LayoutTalkCard()
+            {
+                int right =
+                    talkCard.ClientSize.Width -
+                    14;
+
+                selectTalk.Location =
+                    new Point(
+                        Math.Max(
+                            160,
+                            right -
+                            selectTalk.Width),
+                        47);
+
+                talkText.Width =
+                    Math.Max(
+                        90,
+                        selectTalk.Left -
+                        talkText.Left -
+                        10);
+
+                talkInfo.Width =
+                    Math.Max(
+                        100,
+                        right -
+                        talkInfo.Left);
+
+                talkPreview.Width =
+                    Math.Max(
+                        160,
+                        right -
+                        talkPreview.Left);
+            }
+
+            void RefreshTalkPreview()
+            {
+                uint talkId =
+                    UIntValue(
+                        state.Working,
+                        "TalkID");
+
+                TalkMessageRecord? record =
+                    state.TalkMessages.Find(
+                        talkId);
+
+                if (record == null)
+                {
+                    talkInfo.Text =
+                        talkId == 0
+                            ? "No TalkMessage selected."
+                            : $"TalkID {talkId} was not found in TalkMessage.xml.";
+
+                    talkInfo.ForeColor =
+                        talkId == 0
+                            ? CMuted
+                            : Color.FromArgb(
+                                255,
+                                120,
+                                120);
+
+                    TalkMessageRichTextRenderer.Render(
+                        talkPreview,
+                        string.Empty);
+
+                    return;
+                }
+
+                talkInfo.Text =
+                    $"{record.Id}  •  {record.TitleName}  •  MsgType {record.MessageType}  •  Type {record.Type}";
+
+                talkInfo.ForeColor =
+                    Color.FromArgb(
+                        125,
+                        220,
+                        140);
+
+                TalkMessageRichTextRenderer.Render(
+                    talkPreview,
+                    record.Message);
+            }
+
+            talkText.TextChanged +=
+                (_, _) =>
+                {
+                    state.Dirty = true;
+                    RefreshTalkPreview();
+                };
+
+            selectTalk.Click +=
+                (_, _) =>
+                {
+                    TalkMessageRecord? selected =
+                        ShowTalkMessagePicker(
+                            state.TalkMessages,
+                            UIntValue(
+                                state.Working,
+                                "TalkID"));
+
+                    if (selected == null)
+                        return;
+
+                    talkText.Text =
+                        selected.Id.ToString();
+                };
+
+            talkCard.Resize +=
+                (_, _) =>
+                    LayoutTalkCard();
+
+            talkCard.Controls.Add(
+                talkText);
+
+            talkCard.Controls.Add(
+                selectTalk);
+
+            talkCard.Controls.Add(
+                talkInfo);
+
+            talkCard.Controls.Add(
+                talkPreview);
+
+            state.Editors["TalkID"] =
+                talkText;
+
+            LayoutTalkCard();
+            RefreshTalkPreview();
+
+            section.Controls.Add(
+                talkCard);
+
+            foreach (string field in
+                     new[]
+                     {
+                         "Activetype",
+                         "NoticeTime",
+                         "NoticeEffname",
+                         "unk"
+                     })
+            {
+                AddBoundTextField(
+                    section,
+                    state.Editors,
+                    state.Working,
+                    field,
+                    FriendlyFieldName(
+                        field),
+                    field ==
+                    "NoticeEffname"
+                        ? 320
+                        : 160);
+            }
+
+            host.Controls.Add(
+                section);
+        }
+
+        private TalkMessageRecord? ShowTalkMessagePicker(
+            TalkMessageCatalog catalog,
+            uint selectedId)
+        {
+            using var dialog =
+                new Form
+                {
+                    Text =
+                        "Select Talk Message",
+                    Width = 900,
+                    Height = 690,
+                    StartPosition =
+                        FormStartPosition.CenterParent,
+                    BackColor = CEditor,
+                    ForeColor = CText,
+                    FormBorderStyle =
+                        FormBorderStyle.Sizable,
+                    MinimumSize =
+                        new Size(
+                            720,
+                            520)
+                };
+
+            var header =
+                new Panel
+                {
+                    Dock =
+                        DockStyle.Top,
+                    Height = 76,
+                    BackColor =
+                        Color.FromArgb(
+                            25,
+                            25,
+                            25),
+                    Padding =
+                        new Padding(
+                            14)
+                };
+
+            var search =
+                new TextBox
+                {
+                    Dock =
+                        DockStyle.Top,
+                    Height = 28,
+                    PlaceholderText =
+                        "Search TalkID, title or message text...",
+                    BackColor =
+                        Color.FromArgb(
+                            12,
+                            12,
+                            12),
+                    ForeColor = CText,
+                    BorderStyle =
+                        BorderStyle.FixedSingle
+                };
+
+            var count =
+                new Label
+                {
+                    Dock =
+                        DockStyle.Bottom,
+                    Height = 20,
+                    ForeColor = CMuted,
+                    TextAlign =
+                        ContentAlignment.MiddleLeft
+                };
+
+            header.Controls.Add(
+                search);
+
+            header.Controls.Add(
+                count);
+
+            var split =
+                new TableLayoutPanel
+                {
+                    Dock =
+                        DockStyle.Fill,
+                    ColumnCount = 2,
+                    RowCount = 1,
+                    BackColor = CEditor,
+                    Padding =
+                        new Padding(
+                            12)
+                };
+
+            split.ColumnStyles.Add(
+                new ColumnStyle(
+                    SizeType.Percent,
+                    57F));
+
+            split.ColumnStyles.Add(
+                new ColumnStyle(
+                    SizeType.Percent,
+                    43F));
+
+            split.RowStyles.Add(
+                new RowStyle(
+                    SizeType.Percent,
+                    100F));
+
+            var list =
+                new ListBox
+                {
+                    Dock =
+                        DockStyle.Fill,
+                    BackColor =
+                        Color.FromArgb(
+                            17,
+                            17,
+                            17),
+                    ForeColor = CText,
+                    BorderStyle =
+                        BorderStyle.FixedSingle,
+                    Font =
+                        new Font(
+                            "Segoe UI",
+                            8.5F),
+                    IntegralHeight = false
+                };
+
+            var previewHost =
+                new Panel
+                {
+                    Dock =
+                        DockStyle.Fill,
+                    BackColor =
+                        Color.FromArgb(
+                            21,
+                            21,
+                            21),
+                    Padding =
+                        new Padding(
+                            12)
+                };
+
+            var previewTitle =
+                new Label
+                {
+                    Dock =
+                        DockStyle.Top,
+                    Height = 48,
+                    ForeColor = CText,
+                    Font =
+                        new Font(
+                            "Segoe UI Semibold",
+                            9F),
+                    AutoEllipsis = true
+                };
+
+            var previewMessage =
+                new RichTextBox
+                {
+                    Dock =
+                        DockStyle.Fill,
+                    ReadOnly = true,
+                    BackColor =
+                        Color.FromArgb(
+                            12,
+                            12,
+                            12),
+                    ForeColor = CText,
+                    BorderStyle =
+                        BorderStyle.FixedSingle,
+                    Font =
+                        new Font(
+                            "Segoe UI",
+                            9F),
+                    DetectUrls = false
+                };
+
+            var select =
+                CreateEditorActionButton(
+                    "SELECT MESSAGE");
+
+            select.Dock =
+                DockStyle.Bottom;
+
+            select.Height =
+                36;
+
+            TalkMessageRecord? result =
+                null;
+
+            List<TalkMessageRecord> current =
+                new();
+
+            void RefreshPreview()
+            {
+                if (list.SelectedItem is not TalkMessageRecord record)
+                {
+                    previewTitle.Text =
+                        "No message selected";
+
+                    TalkMessageRichTextRenderer.Render(
+                        previewMessage,
+                        string.Empty);
+
+                    return;
+                }
+
+                previewTitle.Text =
+                    $"TalkID {record.Id}  •  {record.TitleName}  •  MsgType {record.MessageType}  •  Type {record.Type}";
+
+                TalkMessageRichTextRenderer.Render(
+                    previewMessage,
+                    record.Message);
+            }
+
+            void RefreshList()
+            {
+                current =
+                    catalog.Search(
+                        search.Text)
+                        .ToList();
+
+                list.BeginUpdate();
+
+                try
+                {
+                    list.Items.Clear();
+
+                    foreach (TalkMessageRecord record in
+                             current)
+                    {
+                        list.Items.Add(
+                            record);
+                    }
+                }
+                finally
+                {
+                    list.EndUpdate();
+                }
+
+                count.Text =
+                    $"{current.Count:N0} TalkMessage records  •  color markup preview enabled";
+
+                int selectedIndex =
+                    current.FindIndex(
+                        x =>
+                            x.Id ==
+                            selectedId);
+
+                if (selectedIndex >= 0)
+                    list.SelectedIndex =
+                        selectedIndex;
+                else if (list.Items.Count > 0)
+                    list.SelectedIndex =
+                        0;
+
+                RefreshPreview();
+            }
+
+            list.SelectedIndexChanged +=
+                (_, _) =>
+                    RefreshPreview();
+
+            list.DoubleClick +=
+                (_, _) =>
+                {
+                    if (list.SelectedItem is TalkMessageRecord record)
+                    {
+                        result =
+                            record;
+
+                        dialog.DialogResult =
+                            DialogResult.OK;
+                    }
+                };
+
+            select.Click +=
+                (_, _) =>
+                {
+                    if (list.SelectedItem is TalkMessageRecord record)
+                    {
+                        result =
+                            record;
+
+                        dialog.DialogResult =
+                            DialogResult.OK;
+                    }
+                };
+
+            var timer =
+                new System.Windows.Forms.Timer
+                {
+                    Interval = 180
+                };
+
+            timer.Tick +=
+                (_, _) =>
+                {
+                    timer.Stop();
+                    RefreshList();
+                };
+
+            search.TextChanged +=
+                (_, _) =>
+                {
+                    timer.Stop();
+                    timer.Start();
+                };
+
+            dialog.FormClosed +=
+                (_, _) =>
+                {
+                    timer.Stop();
+                    timer.Dispose();
+                };
+
+            previewHost.Controls.Add(
+                previewMessage);
+
+            previewHost.Controls.Add(
+                previewTitle);
+
+            previewHost.Controls.Add(
+                select);
+
+            split.Controls.Add(
+                list,
+                0,
+                0);
+
+            split.Controls.Add(
+                previewHost,
+                1,
+                0);
+
+            dialog.Controls.Add(
+                split);
+
+            dialog.Controls.Add(
+                header);
+
+            RefreshList();
+
+            return dialog.ShowDialog(
+                       this) ==
+                   DialogResult.OK
+                ? result
+                : null;
         }
 
         private FlowLayoutPanel CreateEditorSection(string title, string subtitle)

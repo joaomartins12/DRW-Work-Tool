@@ -251,6 +251,10 @@ namespace DRW_Work_Tool
             create.Size = new Size(148,34);
             create.Anchor = AnchorStyles.Top | AnchorStyles.Right;
 
+            var importer = CreateEditorActionButton("IMPORTER");
+            importer.Size = new Size(116,34);
+            importer.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+
             var filterButton = CreateEditorActionButton("FILTERS");
             filterButton.Size = new Size(106,30);
             filterButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
@@ -338,6 +342,12 @@ namespace DRW_Work_Tool
             {
                 int width = header.ClientSize.Width;
                 create.Location = new Point(Math.Max(400,width-create.Width-14),12);
+                importer.Location =
+                    new Point(
+                        Math.Max(
+                            270,
+                            create.Left - importer.Width - 8),
+                        12);
                 filterButton.Location = new Point(Math.Max(400,width-filterButton.Width-14),72);
                 search.Width = Math.Max(220,filterButton.Left-search.Left-10);
 
@@ -453,7 +463,15 @@ namespace DRW_Work_Tool
 
             create.Click += (_,_)=>OpenDigimonEdit(state,null);
 
-            foreach(Control c in new Control[]{title,sub,create,search,filterButton,filterPanel,count,prev,pg,next})
+            importer.Click +=
+                async (_, _) =>
+                    await OpenDigimonCoreDatabaseImportTabAndRunAsync();
+
+            editorToolTip.SetToolTip(
+                importer,
+                "Valida e importa os três ficheiros pela ordem: Digimon_List.xml -> DigimonEvo.xml -> Skill.xml.");
+
+            foreach(Control c in new Control[]{title,sub,importer,create,search,filterButton,filterPanel,count,prev,pg,next})
                 header.Controls.Add(c);
 
             browserLayout.Controls.Add(
@@ -2479,7 +2497,8 @@ namespace DRW_Work_Tool
             TabPage owner,
             TextBox targetModelId)
         {
-            string key = $"digimon-model-picker:{owner.Name}";
+            string key =
+                $"digimon-model-picker:{owner.Name}";
 
             TabPage? existing =
                 editorTabs.TabPages
@@ -2491,125 +2510,249 @@ namespace DRW_Work_Tool
 
             if (existing != null)
             {
-                editorTabs.SelectedTab = existing;
+                editorTabs.SelectedTab =
+                    existing;
+
                 return;
             }
 
-            var page = CreateDarkTab("Select Digimon Model");
-            page.Name = key;
+            var page =
+                CreateDarkTab(
+                    "Select Digimon Model");
+
+            page.Name =
+                key;
 
             var loading =
                 new EditorLoadingView(
                     "Loading Digimon Models",
-                    "Reading Model.xml and filtering Data\\Digimon\\ models only.");
+                    "Using the startup-preloaded Model.xml Data\\Digimon catalog.");
 
-            page.Controls.Add(loading);
-            editorTabs.TabPages.Add(page);
-            editorTabs.SelectedTab = page;
+            loading.Dock =
+                DockStyle.Fill;
+
+            page.Controls.Add(
+                loading);
+
+            editorTabs.TabPages.Add(
+                page);
+
+            editorTabs.SelectedTab =
+                page;
 
             DigimonModelReferenceService catalog;
 
             try
             {
+                // IMPORTANT:
+                // LoadingForm should already have populated this catalog.
+                // Use the in-memory instance immediately whenever possible.
                 catalog =
-                    await EditorPreloadService
+                    EditorPreloadService
+                        .TryGetDigimonModels()
+                    ?? await EditorPreloadService
                         .GetDigimonModelsAsync();
             }
             catch (Exception ex)
             {
                 if (!page.IsDisposed)
-                    loading.SetError("Model.xml could not be loaded",ex.Message);
+                {
+                    loading.SetError(
+                        "Model.xml could not be loaded",
+                        ex.Message);
+                }
+
                 return;
             }
 
-            if (page.IsDisposed || owner.IsDisposed)
+            if (page.IsDisposed ||
+                owner.IsDisposed)
+            {
                 return;
+            }
 
-            page.SuspendLayout();
+            // Build the complete first usable frame behind the loading view.
+            // The loading view is removed only after the first page has been
+            // created and laid out successfully.
+            var content =
+                new Panel
+                {
+                    Dock = DockStyle.Fill,
+                    BackColor =
+                        Color.FromArgb(
+                            18,
+                            18,
+                            18),
+                    Visible = false
+                };
 
             var header =
                 new Panel
                 {
                     Dock = DockStyle.Top,
                     Height = 116,
-                    BackColor = Color.FromArgb(24,24,24)
+                    BackColor =
+                        Color.FromArgb(
+                            24,
+                            24,
+                            24)
                 };
 
             var title =
                 new Label
                 {
-                    Text = "Select Digimon Model",
+                    Text =
+                        "Select Digimon Model",
                     ForeColor = CText,
-                    Font = new Font("Segoe UI Semibold",13F,FontStyle.Bold),
-                    Location = new Point(14,10),
-                    Size = new Size(320,28)
+                    Font =
+                        new Font(
+                            "Segoe UI Semibold",
+                            13F,
+                            FontStyle.Bold),
+                    Location =
+                        new Point(
+                            14,
+                            10),
+                    Size =
+                        new Size(
+                            320,
+                            28)
                 };
 
             var subtitle =
                 new Label
                 {
-                    Text = $"Model.xml  •  {catalog.Models.Count:N0} Data\\Digimon models",
-                    ForeColor = Color.FromArgb(125,220,140),
-                    Location = new Point(16,40),
-                    Size = new Size(520,20)
+                    Text =
+                        $"Model.xml  •  {catalog.Models.Count:N0} Data\\Digimon models  •  PRELOADED",
+                    ForeColor =
+                        Color.FromArgb(
+                            125,
+                            220,
+                            140),
+                    Location =
+                        new Point(
+                            16,
+                            40),
+                    Size =
+                        new Size(
+                            560,
+                            20)
                 };
 
             var search =
                 new TextBox
                 {
-                    BackColor = Color.FromArgb(10,10,10),
-                    ForeColor = Color.White,
-                    BorderStyle = BorderStyle.FixedSingle,
-                    Font = new Font("Segoe UI",9F),
-                    PlaceholderText = "Search Model ID, Digimon folder/name or KFM path...",
-                    Location = new Point(14,72),
+                    BackColor =
+                        Color.FromArgb(
+                            10,
+                            10,
+                            10),
+                    ForeColor =
+                        Color.White,
+                    BorderStyle =
+                        BorderStyle.FixedSingle,
+                    Font =
+                        new Font(
+                            "Segoe UI",
+                            9F),
+                    PlaceholderText =
+                        "Search Model ID, Digimon folder/name or KFM path...",
+                    Location =
+                        new Point(
+                            14,
+                            72),
                     Height = 28
                 };
 
-            var close = CreateEditorActionButton("CLOSE");
-            close.Size = new Size(88,30);
+            var close =
+                CreateEditorActionButton(
+                    "CLOSE");
+
+            close.Size =
+                new Size(
+                    88,
+                    30);
 
             var results =
                 new FlowLayoutPanel
                 {
                     Dock = DockStyle.Fill,
                     AutoScroll = true,
-                    FlowDirection = FlowDirection.TopDown,
+                    FlowDirection =
+                        FlowDirection.TopDown,
                     WrapContents = false,
-                    BackColor = Color.FromArgb(18,18,18),
-                    Padding = new Padding(12,10,28,42)
+                    BackColor =
+                        Color.FromArgb(
+                            18,
+                            18,
+                            18),
+                    Padding =
+                        new Padding(
+                            12,
+                            10,
+                            34,
+                            44)
                 };
 
-            DarkUi.ApplyDarkScrollBar(results);
+            DarkUi.ApplyDarkScrollBar(
+                results);
 
             var footer =
                 new Panel
                 {
                     Dock = DockStyle.Bottom,
                     Height = 46,
-                    BackColor = Color.FromArgb(23,23,23)
+                    BackColor =
+                        Color.FromArgb(
+                            23,
+                            23,
+                            23)
                 };
 
-            var previous = CreateEditorActionButton("◀ PREVIOUS");
-            previous.Size = new Size(110,30);
+            var previous =
+                CreateEditorActionButton(
+                    "◀ PREVIOUS");
+
+            previous.Size =
+                new Size(
+                    110,
+                    30);
 
             var pageLabel =
                 new Label
                 {
                     ForeColor = CText,
-                    TextAlign = ContentAlignment.MiddleCenter,
-                    Size = new Size(90,30)
+                    TextAlign =
+                        ContentAlignment.MiddleCenter,
+                    Size =
+                        new Size(
+                            90,
+                            30)
                 };
 
-            var next = CreateEditorActionButton("NEXT ▶");
-            next.Size = new Size(110,30);
+            var next =
+                CreateEditorActionButton(
+                    "NEXT ▶");
 
-            footer.Controls.Add(previous);
-            footer.Controls.Add(pageLabel);
-            footer.Controls.Add(next);
+            next.Size =
+                new Size(
+                    110,
+                    30);
 
-            IReadOnlyList<DigimonModelReference> filtered = catalog.Models;
-            const int PageSize = 60;
+            footer.Controls.Add(
+                previous);
+
+            footer.Controls.Add(
+                pageLabel);
+
+            footer.Controls.Add(
+                next);
+
+            IReadOnlyList<DigimonModelReference> filtered =
+                catalog.Models;
+
+            // Keep the picker lightweight even on large Model.xml files.
+            const int PageSize = 30;
             int pageIndex = 0;
 
             var timer =
@@ -2620,50 +2763,102 @@ namespace DRW_Work_Tool
 
             void ClosePicker()
             {
-                if (page.IsDisposed) return;
+                timer.Stop();
+                timer.Dispose();
 
-                editorTabs.TabPages.Remove(page);
+                if (page.IsDisposed)
+                    return;
+
+                editorTabs.TabPages.Remove(
+                    page);
+
                 page.Dispose();
 
                 if (!owner.IsDisposed)
-                    editorTabs.SelectedTab = owner;
+                {
+                    editorTabs.SelectedTab =
+                        owner;
+                }
             }
 
-            void Select(DigimonModelReference selected)
+            void Select(
+                DigimonModelReference selected)
             {
                 targetModelId.Text =
-                    selected.Id.ToString(CultureInfo.InvariantCulture);
+                    selected.Id.ToString(
+                        CultureInfo.InvariantCulture);
+
                 ClosePicker();
             }
 
-            Panel CreateCard(DigimonModelReference item)
+            Panel CreateCard(
+                DigimonModelReference item)
             {
                 var card =
                     new Panel
                     {
                         Height = 102,
-                        BackColor = Color.FromArgb(29,29,29),
-                        BorderStyle = BorderStyle.FixedSingle,
-                        Margin = new Padding(3,3,3,5)
+                        BackColor =
+                            Color.FromArgb(
+                                29,
+                                29,
+                                29),
+                        BorderStyle =
+                            BorderStyle.FixedSingle,
+                        Margin =
+                            new Padding(
+                                3,
+                                3,
+                                3,
+                                5)
                     };
 
                 var pic =
                     new PictureBox
                     {
-                        Location = new Point(12,15),
-                        Size = new Size(68,68),
-                        BackColor = Color.FromArgb(8,8,8),
-                        SizeMode = PictureBoxSizeMode.Zoom,
-                        Image = DigimonIcon(item.Id,item.Id)
+                        Location =
+                            new Point(
+                                12,
+                                15),
+                        Size =
+                            new Size(
+                                68,
+                                68),
+                        BackColor =
+                            Color.FromArgb(
+                                8,
+                                8,
+                                8),
+                        SizeMode =
+                            PictureBoxSizeMode.Zoom,
+
+                        // Icons were already prepared by the startup preload.
+                        // Do not force a new Model.xml parse or disk scan here.
+                        Image =
+                            EditorPreloadService
+                                .TryGetDigimonIcon(
+                                    item.Id)
                     };
 
                 var name =
                     new Label
                     {
-                        Text = $"{item.Id} — {item.DisplayName}",
-                        ForeColor = Color.FromArgb(125,220,140),
-                        Font = new Font("Segoe UI Semibold",9.6F,FontStyle.Bold),
-                        Location = new Point(94,12),
+                        Text =
+                            $"{item.Id} — {item.DisplayName}",
+                        ForeColor =
+                            Color.FromArgb(
+                                125,
+                                220,
+                                140),
+                        Font =
+                            new Font(
+                                "Segoe UI Semibold",
+                                9.6F,
+                                FontStyle.Bold),
+                        Location =
+                            new Point(
+                                94,
+                                12),
                         Height = 22,
                         AutoEllipsis = true
                     };
@@ -2671,10 +2866,18 @@ namespace DRW_Work_Tool
                 var path =
                     new Label
                     {
-                        Text = item.KfmPath,
-                        ForeColor = CMuted,
-                        Font = new Font("Segoe UI",7.4F),
-                        Location = new Point(94,39),
+                        Text =
+                            item.KfmPath,
+                        ForeColor =
+                            CMuted,
+                        Font =
+                            new Font(
+                                "Segoe UI",
+                                7.4F),
+                        Location =
+                            new Point(
+                                94,
+                                39),
                         Height = 20,
                         AutoEllipsis = true
                     };
@@ -2682,45 +2885,95 @@ namespace DRW_Work_Tool
                 var dims =
                     new Label
                     {
-                        Text = $"Scale {item.Scale:0.###}  •  Height {item.Height:0.###}  •  Width {item.Width:0.###}",
-                        ForeColor = Color.FromArgb(155,155,155),
-                        Font = new Font("Consolas",7F),
-                        Location = new Point(94,65),
+                        Text =
+                            $"Scale {item.Scale:0.###}  •  Height {item.Height:0.###}  •  Width {item.Width:0.###}",
+                        ForeColor =
+                            Color.FromArgb(
+                                155,
+                                155,
+                                155),
+                        Font =
+                            new Font(
+                                "Consolas",
+                                7F),
+                        Location =
+                            new Point(
+                                94,
+                                65),
                         Height = 18,
                         AutoEllipsis = true
                     };
 
-                var select = CreateEditorActionButton("SELECT");
-                select.Size = new Size(94,32);
+                var select =
+                    CreateEditorActionButton(
+                        "SELECT");
+
+                select.Size =
+                    new Size(
+                        94,
+                        32);
 
                 void Relayout()
                 {
                     select.Location =
                         new Point(
-                            card.ClientSize.Width-select.Width-12,
+                            Math.Max(
+                                0,
+                                card.ClientSize.Width -
+                                select.Width -
+                                12),
                             33);
 
                     int width =
                         Math.Max(
-                            150,
-                            select.Left-name.Left-14);
+                            120,
+                            select.Left -
+                            name.Left -
+                            14);
 
-                    name.Width=width;
-                    path.Width=width;
-                    dims.Width=width;
+                    name.Width =
+                        width;
+
+                    path.Width =
+                        width;
+
+                    dims.Width =
+                        width;
                 }
 
-                card.Resize += (_,_)=>Relayout();
-                select.Click += (_,_)=>Select(item);
-                card.DoubleClick += (_,_)=>Select(item);
-                pic.DoubleClick += (_,_)=>Select(item);
+                card.Resize +=
+                    (_, _) =>
+                        Relayout();
 
-                card.Controls.Add(pic);
-                card.Controls.Add(name);
-                card.Controls.Add(path);
-                card.Controls.Add(dims);
-                card.Controls.Add(select);
+                select.Click +=
+                    (_, _) =>
+                        Select(item);
+
+                card.DoubleClick +=
+                    (_, _) =>
+                        Select(item);
+
+                pic.DoubleClick +=
+                    (_, _) =>
+                        Select(item);
+
+                card.Controls.Add(
+                    pic);
+
+                card.Controls.Add(
+                    name);
+
+                card.Controls.Add(
+                    path);
+
+                card.Controls.Add(
+                    dims);
+
+                card.Controls.Add(
+                    select);
+
                 Relayout();
+
                 return card;
             }
 
@@ -2728,126 +2981,308 @@ namespace DRW_Work_Tool
             {
                 int width =
                     Math.Max(
-                        460,
-                        results.ClientSize.Width-results.Padding.Horizontal-
-                        SystemInformation.VerticalScrollBarWidth-18);
+                        360,
+                        results.ClientSize.Width -
+                        results.Padding.Horizontal -
+                        SystemInformation
+                            .VerticalScrollBarWidth -
+                        18);
 
-                foreach(Control c in results.Controls)
-                    c.Width=width;
+                foreach (Control control in
+                         results.Controls)
+                {
+                    control.Width =
+                        width;
+                }
 
                 next.Location =
                     new Point(
-                        footer.ClientSize.Width-next.Width-16,
+                        Math.Max(
+                            0,
+                            footer.ClientSize.Width -
+                            next.Width -
+                            16),
                         8);
 
                 pageLabel.Location =
                     new Point(
-                        next.Left-pageLabel.Width-8,
+                        Math.Max(
+                            0,
+                            next.Left -
+                            pageLabel.Width -
+                            8),
                         8);
 
                 previous.Location =
                     new Point(
-                        pageLabel.Left-previous.Width-8,
+                        Math.Max(
+                            0,
+                            pageLabel.Left -
+                            previous.Width -
+                            8),
                         8);
+            }
+
+            void ResetScroll()
+            {
+                try
+                {
+                    results.AutoScrollPosition =
+                        new Point(
+                            0,
+                            0);
+
+                    results.VerticalScroll.Value =
+                        results.VerticalScroll.Minimum;
+                }
+                catch
+                {
+                }
             }
 
             void Render()
             {
                 results.SuspendLayout();
-                results.Controls.Clear();
 
-                int pages =
-                    Math.Max(
-                        1,
-                        (int)Math.Ceiling(
-                            filtered.Count/(double)PageSize));
+                try
+                {
+                    foreach (Control control in
+                             results.Controls
+                                 .Cast<Control>()
+                                 .ToArray())
+                    {
+                        results.Controls.Remove(
+                            control);
 
-                pageIndex = Math.Clamp(pageIndex,0,pages-1);
+                        control.Dispose();
+                    }
 
-                foreach(var item in filtered.Skip(pageIndex*PageSize).Take(PageSize))
-                    results.Controls.Add(CreateCard(item));
+                    int pages =
+                        Math.Max(
+                            1,
+                            (int)Math.Ceiling(
+                                filtered.Count /
+                                (double)PageSize));
 
-                results.ResumeLayout();
+                    pageIndex =
+                        Math.Clamp(
+                            pageIndex,
+                            0,
+                            pages - 1);
 
-                pageLabel.Text=$"{pageIndex+1} / {pages}";
-                previous.Enabled=pageIndex>0;
-                next.Enabled=pageIndex<pages-1;
-                ResizeCards();
+                    foreach (DigimonModelReference item in
+                             filtered
+                                 .Skip(
+                                     pageIndex *
+                                     PageSize)
+                                 .Take(
+                                     PageSize))
+                    {
+                        results.Controls.Add(
+                            CreateCard(
+                                item));
+                    }
+
+                    pageLabel.Text =
+                        $"{pageIndex + 1} / {pages}";
+
+                    previous.Enabled =
+                        pageIndex > 0;
+
+                    next.Enabled =
+                        pageIndex < pages - 1;
+
+                    ResizeCards();
+                }
+                finally
+                {
+                    results.ResumeLayout(
+                        true);
+                }
             }
 
-            timer.Tick += (_,_) =>
-            {
-                timer.Stop();
-                filtered = catalog.Search(search.Text);
-                pageIndex=0;
-                Render();
-            };
+            timer.Tick +=
+                (_, _) =>
+                {
+                    timer.Stop();
 
-            search.TextChanged += (_,_) =>
-            {
-                timer.Stop();
-                timer.Start();
-            };
+                    filtered =
+                        catalog.Search(
+                            search.Text);
 
-            previous.Click += (_,_) =>
-            {
-                if(pageIndex<=0)return;
-                pageIndex--;
-                Render();
-            };
+                    pageIndex = 0;
 
-            next.Click += (_,_) =>
-            {
-                int pages=Math.Max(1,(int)Math.Ceiling(filtered.Count/(double)PageSize));
-                if(pageIndex>=pages-1)return;
-                pageIndex++;
-                Render();
-            };
+                    Render();
 
-            close.Click += (_,_)=>ClosePicker();
+                    ResetScroll();
+                };
+
+            search.TextChanged +=
+                (_, _) =>
+                {
+                    timer.Stop();
+                    timer.Start();
+                };
+
+            previous.Click +=
+                (_, _) =>
+                {
+                    if (pageIndex <= 0)
+                        return;
+
+                    pageIndex--;
+
+                    Render();
+                    ResetScroll();
+                };
+
+            next.Click +=
+                (_, _) =>
+                {
+                    int pages =
+                        Math.Max(
+                            1,
+                            (int)Math.Ceiling(
+                                filtered.Count /
+                                (double)PageSize));
+
+                    if (pageIndex >=
+                        pages - 1)
+                    {
+                        return;
+                    }
+
+                    pageIndex++;
+
+                    Render();
+                    ResetScroll();
+                };
+
+            close.Click +=
+                (_, _) =>
+                    ClosePicker();
 
             void PositionHeader()
             {
                 close.Location =
                     new Point(
-                        header.ClientSize.Width-close.Width-14,
+                        Math.Max(
+                            0,
+                            header.ClientSize.Width -
+                            close.Width -
+                            14),
                         14);
 
                 search.Width =
                     Math.Max(
                         250,
-                        header.ClientSize.Width-28);
+                        header.ClientSize.Width -
+                        28);
 
                 subtitle.Width =
                     Math.Max(
-                        200,
-                        close.Left-subtitle.Left-10);
+                        180,
+                        close.Left -
+                        subtitle.Left -
+                        10);
             }
 
-            header.Controls.Add(title);
-            header.Controls.Add(subtitle);
-            header.Controls.Add(search);
-            header.Controls.Add(close);
+            header.Controls.Add(
+                title);
 
-            header.Resize += (_,_)=>PositionHeader();
-            results.Resize += (_,_)=>ResizeCards();
-            footer.Resize += (_,_)=>ResizeCards();
+            header.Controls.Add(
+                subtitle);
 
-            page.Controls.Add(results);
-            page.Controls.Add(footer);
-            page.Controls.Add(header);
+            header.Controls.Add(
+                search);
 
-            PositionHeader();
-            Render();
+            header.Controls.Add(
+                close);
 
-            uint current=UInt(targetModelId.Text);
-            if(current!=0 && catalog.TryGet(current,out DigimonModelReference selected))
+            header.Resize +=
+                (_, _) =>
+                    PositionHeader();
+
+            results.Resize +=
+                (_, _) =>
+                    ResizeCards();
+
+            footer.Resize +=
+                (_, _) =>
+                    ResizeCards();
+
+            content.Controls.Add(
+                results);
+
+            content.Controls.Add(
+                footer);
+
+            content.Controls.Add(
+                header);
+
+            page.Controls.Add(
+                content);
+
+            try
             {
-                search.Text=selected.DisplayName;
-                search.SelectionStart=search.TextLength;
-            }
+                PositionHeader();
+                Render();
 
-            search.Focus();
+                uint current =
+                    UInt(
+                        targetModelId.Text);
+
+                // Do NOT populate the search TextBox with the current model.
+                // Doing so immediately triggered a second timer/render during
+                // the loading transition and made the tab look stuck.
+                if (current != 0 &&
+                    catalog.TryGet(
+                        current,
+                        out DigimonModelReference selected))
+                {
+                    subtitle.Text =
+                        $"Model.xml  •  {catalog.Models.Count:N0} Data\\Digimon models  •  Current: {selected.Id} {selected.DisplayName}";
+                }
+
+                // Give WinForms one layout/message cycle with the finished
+                // content still hidden, then swap atomically.
+                await Task.Yield();
+
+                if (page.IsDisposed)
+                    return;
+
+                page.Controls.Remove(
+                    loading);
+
+                loading.Dispose();
+
+                content.Visible =
+                    true;
+
+                content.BringToFront();
+
+                page.ResumeLayout(
+                    true);
+
+                content.PerformLayout();
+                results.PerformLayout();
+
+                search.Focus();
+            }
+            catch (Exception ex)
+            {
+                content.Visible =
+                    false;
+
+                if (!loading.IsDisposed)
+                {
+                    loading.BringToFront();
+
+                    loading.SetError(
+                        "Digimon model picker could not render",
+                        ex.Message);
+                }
+            }
         }
 
         private static Panel SkillSelectionCard(

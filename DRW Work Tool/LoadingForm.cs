@@ -295,32 +295,41 @@ namespace DRW_Work_Tool
             }
             catch (Exception ex)
             {
-                // The old application behavior allowed the UI to continue even
-                // when an optional editor preload failed. Preserve that behavior,
-                // but make the failure visible on the startup window.
+                // Core editor preload failed. Do not open Form1 with partially
+                // initialized caches; Program.cs will stop because
+                // StartupFinished remains false.
+                StartupFinished = false;
+
                 _status.Text =
-                    "Preload warning: " +
-                    ex.Message;
+                    "Startup preload failed: " +
+                    ex.GetBaseException().Message;
 
                 _status.ForeColor =
                     Color.FromArgb(
                         255,
-                        190,
-                        90);
+                        120,
+                        120);
 
                 _percent.Text =
-                    "WARN";
+                    "ERROR";
 
                 _percent.ForeColor =
                     Color.FromArgb(
                         255,
-                        190,
-                        90);
+                        120,
+                        120);
 
-                StartupFinished = true;
+                _progressFill.BackColor =
+                    Color.FromArgb(
+                        210,
+                        75,
+                        75);
+
+                _progressFill.Width =
+                    _progressTrack.ClientSize.Width;
 
                 await Task.Delay(
-                    1400);
+                    2600);
 
                 Close();
             }

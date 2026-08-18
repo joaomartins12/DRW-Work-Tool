@@ -660,9 +660,18 @@ namespace DRW_Work_Tool
                     "Skill",
                     StringComparison.OrdinalIgnoreCase);
 
+            bool isMonsterCore =
+                entity.Equals(
+                    "Monster",
+                    StringComparison.OrdinalIgnoreCase) ||
+                folderName.Equals(
+                    "Monster",
+                    StringComparison.OrdinalIgnoreCase);
+
             if (!isItemList &&
                 !isNpc &&
-                !isDigimonCore)
+                !isDigimonCore &&
+                !isMonsterCore)
             {
                 return;
             }
@@ -694,9 +703,11 @@ namespace DRW_Work_Tool
             button.Name =
                 isDigimonCore
                     ? "btnImportDigimonCoreToDatabase"
-                    : isNpc
-                        ? "btnImportNpcToDatabase"
-                        : "btnImportItemListToDatabase";
+                    : isMonsterCore
+                        ? "btnImportMonsterCoreToDatabase"
+                        : isNpc
+                            ? "btnImportNpcToDatabase"
+                            : "btnImportItemListToDatabase";
 
             button.Dock =
                 DockStyle.Fill;
@@ -730,6 +741,20 @@ namespace DRW_Work_Tool
                 button.Click +=
                     async (_, _) =>
                         await OpenDigimonCoreDatabaseImportTabAndRunAsync();
+            }
+            else if (isMonsterCore)
+            {
+                editorToolTip.SetToolTip(
+                    button,
+                    "Importa Monster.xml + MonstersSkill.xml para " +
+                    "MonsterBaseInfo, MonsterSkill e MonsterSkillInfo. " +
+                    "Os dois XMLs são validados por completo antes de qualquer DELETE. " +
+                    "A operação usa uma única transação SQL com ROLLBACK em caso de erro.");
+
+                button.Click +=
+                    async (_, _) =>
+                        await OpenMonsterDatabaseImportTabAndRunAsync(
+                            folder);
             }
             else if (isNpc)
             {
@@ -786,6 +811,372 @@ namespace DRW_Work_Tool
                 importHost);
 
             importHost.BringToFront();
+        }
+
+        private async Task OpenMonsterDatabaseImportTabAndRunAsync(
+            string monsterFolder)
+        {
+            string connection;
+
+            try
+            {
+                connection =
+                    DatabaseConnectionStore.Load();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "Não foi possível ler a connection string cifrada.\r\n\r\n" +
+                    ex.Message,
+                    "Monster Database Importer",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(connection))
+            {
+                MessageBox.Show(
+                    "Configura primeiro a connection string em SETTINGS → SQL Server Database.",
+                    "Monster Database Importer",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+
+                ShowSettings(true);
+                return;
+            }
+
+            string monsterXml =
+                Path.Combine(
+                    monsterFolder,
+                    "Monster.xml");
+
+            string monsterSkillXml =
+                Path.Combine(
+                    monsterFolder,
+                    "MonstersSkill.xml");
+
+            string[] required =
+            {
+                monsterXml,
+                monsterSkillXml
+            };
+
+            string[] missing =
+                required
+                    .Where(x => !File.Exists(x))
+                    .ToArray();
+
+            if (missing.Length > 0)
+            {
+                MessageBox.Show(
+                    "O Monster importer precisa dos dois XMLs:\r\n\r\n" +
+                    string.Join("\r\n", required) +
+                    "\r\n\r\nEm falta:\r\n" +
+                    string.Join("\r\n", missing),
+                    "Monster Database Importer",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+
+                return;
+            }
+
+            if (MessageBox.Show(
+                    "MONSTER -> DATABASE\r\n\r\n" +
+                    "A operação vai validar PRIMEIRO Monster.xml e MonstersSkill.xml.\r\n" +
+                    "Só depois da validação completa será iniciada UMA transação SQL.\r\n\r\n" +
+                    "Tabelas substituídas:\r\n" +
+                    "• Asset.MonsterBaseInfo\r\n" +
+                    "• Asset.MonsterSkill\r\n" +
+                    "• Asset.MonsterSkillInfo\r\n\r\n" +
+                    "Se qualquer validação, INSERT ou verificação falhar, será executado ROLLBACK.\r\n\r\n" +
+                    "Campos XML que não possuem coluna equivalente nestas três tabelas NÃO serão inventados nem gravados noutra coluna.\r\n\r\n" +
+                    "Continuar?",
+                    "Monster Database Importer",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning) != DialogResult.Yes)
+            {
+                return;
+            }
+
+            var page =
+                CreateDarkTab(
+                    "Monster DB Import [Running]");
+
+            var header =
+                new Panel
+                {
+                    Dock = DockStyle.Top,
+                    Height = 72,
+                    BackColor = CPanel
+                };
+
+            var status =
+                new Label
+                {
+                    Text =
+                        "VALIDATING — Monster.xml -> MonstersSkill.xml",
+                    ForeColor = CText,
+                    Font =
+                        new Font(
+                            "Segoe UI Semibold",
+                            9F,
+                            FontStyle.Bold),
+                    Location = new Point(14, 0),
+                    Size = new Size(650, 72),
+                    TextAlign =
+                        ContentAlignment.MiddleLeft,
+                    AutoEllipsis = true
+                };
+
+            var cancel =
+                CreateEditorActionButton(
+                    "CANCEL");
+
+            cancel.Size =
+                new Size(
+                    96,
+                    34);
+
+            cancel.Anchor =
+                AnchorStyles.Top |
+                AnchorStyles.Right;
+
+            void LayoutHeader()
+            {
+                cancel.Location =
+                    new Point(
+                        header.ClientSize.Width -
+                        cancel.Width -
+                        14,
+                        19);
+
+                status.Width =
+                    Math.Max(
+                        260,
+                        cancel.Left -
+                        status.Left -
+                        14);
+            }
+
+            header.Resize +=
+                (_, _) =>
+                    LayoutHeader();
+
+            var log =
+                new RichTextBox
+                {
+                    Dock = DockStyle.Fill,
+                    ReadOnly = true,
+                    BorderStyle =
+                        BorderStyle.None,
+                    BackColor =
+                        Color.FromArgb(
+                            10,
+                            10,
+                            10),
+                    ForeColor =
+                        Color.FromArgb(
+                            225,
+                            225,
+                            225),
+                    Font =
+                        new Font(
+                            "Consolas",
+                            8.5F),
+                    WordWrap = false
+                };
+
+            DarkUi.ApplyDarkScrollBar(
+                log);
+
+            header.Controls.Add(status);
+            header.Controls.Add(cancel);
+
+            page.Controls.Add(log);
+            page.Controls.Add(header);
+
+            editorTabs.TabPages.Add(page);
+            editorTabs.SelectedTab = page;
+
+            LayoutHeader();
+
+            databaseImportCancellation?.Cancel();
+            databaseImportCancellation?.Dispose();
+
+            databaseImportCancellation =
+                new CancellationTokenSource();
+
+            cancel.Click +=
+                (_, _) =>
+                    databaseImportCancellation.Cancel();
+
+            void AppendProgressLine(string line)
+            {
+                if (log.IsDisposed)
+                    return;
+
+                int start =
+                    log.TextLength;
+
+                log.AppendText(
+                    line +
+                    Environment.NewLine);
+
+                log.Select(
+                    start,
+                    line.Length);
+
+                if (line.Contains(
+                        "WARNING",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    log.SelectionColor =
+                        Color.FromArgb(
+                            255,
+                            190,
+                            90);
+                }
+                else if (line.Contains(
+                             "SUCESSO",
+                             StringComparison.OrdinalIgnoreCase) ||
+                         line.Contains(
+                             "VERIFY OK",
+                             StringComparison.OrdinalIgnoreCase) ||
+                         line.Contains(
+                             "concluíd",
+                             StringComparison.OrdinalIgnoreCase))
+                {
+                    log.SelectionColor =
+                        Color.FromArgb(
+                            125,
+                            220,
+                            140);
+                }
+                else if (line.Contains(
+                             "ERRO",
+                             StringComparison.OrdinalIgnoreCase) ||
+                         line.Contains(
+                             "FALH",
+                             StringComparison.OrdinalIgnoreCase) ||
+                         line.Contains(
+                             "ROLLBACK",
+                             StringComparison.OrdinalIgnoreCase))
+                {
+                    log.SelectionColor =
+                        Color.FromArgb(
+                            255,
+                            95,
+                            95);
+                }
+                else
+                {
+                    log.SelectionColor =
+                        Color.FromArgb(
+                            225,
+                            225,
+                            225);
+                }
+
+                log.SelectionStart =
+                    log.TextLength;
+
+                log.SelectionColor =
+                    Color.FromArgb(
+                        225,
+                        225,
+                        225);
+
+                log.ScrollToCaret();
+            }
+
+            IProgress<string> progress =
+                new Progress<string>(
+                    AppendProgressLine);
+
+            SetDatabaseConnectionState(
+                DatabaseConnectionState.Checking,
+                "Importing...");
+
+            try
+            {
+                var service =
+                    new MonsterDatabaseImportService();
+
+                MonsterDatabaseImportSummary summary =
+                    await service.ImportAsync(
+                        connection,
+                        monsterXml,
+                        monsterSkillXml,
+                        progress,
+                        databaseImportCancellation.Token);
+
+                page.Text =
+                    "Monster DB Import [Success]";
+
+                status.Text =
+                    $"SUCCESS — MonsterBaseInfo {summary.MonsterBaseInfoRows:N0} | " +
+                    $"MonsterSkill {summary.MonsterSkillRows:N0} | " +
+                    $"MonsterSkillInfo {summary.MonsterSkillInfoRows:N0}";
+
+                SetDatabaseConnectionState(
+                    DatabaseConnectionState.Connected,
+                    "Connected");
+
+                MessageBox.Show(
+                    "Importação Monster concluída com sucesso.\r\n\r\n" +
+                    $"MonsterBaseInfo: {summary.MonsterBaseInfoRows:N0}\r\n" +
+                    $"MonsterSkill: {summary.MonsterSkillRows:N0}\r\n" +
+                    $"MonsterSkillInfo: {summary.MonsterSkillInfoRows:N0}\r\n" +
+                    $"Monster refs apenas no MonstersSkill.xml: {summary.MissingMonsterReferences:N0}\r\n\r\n" +
+                    $"Tempo: {summary.Elapsed.TotalSeconds:N1}s\r\n\r\n" +
+                    $"Log:\r\n{summary.LogFile}",
+                    "Monster Database Importer",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+            catch (OperationCanceledException)
+            {
+                page.Text =
+                    "Monster DB Import [Cancelled]";
+
+                status.Text =
+                    "IMPORT CANCELLED — transaction rolled back.";
+
+                SetDatabaseConnectionState(
+                    DatabaseConnectionState.Checking,
+                    "Cancelled");
+            }
+            catch (Exception ex)
+            {
+                page.Text =
+                    "Monster DB Import [Failed]";
+
+                status.Text =
+                    "IMPORT FAILED — see log below.";
+
+                AppendProgressLine(
+                    "[ERROR] " +
+                    ex);
+
+                SetDatabaseConnectionState(
+                    DatabaseConnectionState.Failed,
+                    "Import failed");
+
+                MessageBox.Show(
+                    "A importação Monster falhou.\r\n\r\n" +
+                    ex.Message +
+                    "\r\n\r\nSe a transação SQL já tinha começado, foi executado ROLLBACK. " +
+                    "Consulta o separador de log para os detalhes.",
+                    "Monster Database Importer",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            finally
+            {
+                cancel.Enabled = false;
+            }
         }
 
         private async Task OpenDatabaseImportTabAndRunAsync(
