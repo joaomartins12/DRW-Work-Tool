@@ -14,6 +14,7 @@ namespace DRW_Work_Tool
     {
         private Button? _cloneTemplateButton;
         private TabPage? _cloneTemplateHost;
+        private Control? _cloneTemplateLayoutHost;
         private bool _editorPolishInitialized;
 
         protected override void OnShown(EventArgs e)
@@ -62,16 +63,20 @@ namespace DRW_Work_Tool
 
         private void EnsureCloneTemplateButton(TabPage page)
         {
+            Control layoutHost = FindCloneTemplateLayoutHost(page) ?? page;
+
             if (!ReferenceEquals(_cloneTemplateHost, page) ||
+                !ReferenceEquals(_cloneTemplateLayoutHost, layoutHost) ||
                 _cloneTemplateButton == null ||
                 _cloneTemplateButton.IsDisposed)
             {
                 RemoveCloneTemplateButton();
 
                 _cloneTemplateHost = page;
+                _cloneTemplateLayoutHost = layoutHost;
                 _cloneTemplateButton = CreateEditorActionButton("CLONE TEMPLATE");
                 _cloneTemplateButton.Name = "GlobalCloneTemplateButton";
-                _cloneTemplateButton.Size = new Size(158, 32);
+                _cloneTemplateButton.Size = new Size(158, 34);
                 _cloneTemplateButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
                 _cloneTemplateButton.Click += (_, _) => CloneSelectedEditorTemplate();
 
@@ -79,12 +84,33 @@ namespace DRW_Work_Tool
                     _cloneTemplateButton,
                     "Clone the current record, assign a fresh ID when supported, and open the clone as a new editable record.");
 
-                page.Controls.Add(_cloneTemplateButton);
-                page.Resize += CloneTemplateHost_Resize;
+                layoutHost.Controls.Add(_cloneTemplateButton);
+                layoutHost.Resize += CloneTemplateHost_Resize;
             }
 
             PositionCloneTemplateButton();
             _cloneTemplateButton.BringToFront();
+        }
+
+        private static Control? FindCloneTemplateLayoutHost(Control root)
+        {
+            List<Panel> panels = EnumerateControls(root)
+                .OfType<Panel>()
+                .Where(panel =>
+                    panel.Dock == DockStyle.Top &&
+                    panel.Height >= 48 &&
+                    panel.Height <= 110)
+                .ToList();
+
+            Panel? withEditorActions = panels
+                .FirstOrDefault(panel =>
+                    panel.Controls
+                        .OfType<Button>()
+                        .Any(button =>
+                            button.Text.Equals("SAVE", StringComparison.OrdinalIgnoreCase) ||
+                            button.Text.Contains("XML", StringComparison.OrdinalIgnoreCase)));
+
+            return withEditorActions ?? panels.FirstOrDefault();
         }
 
         private void CloneTemplateHost_Resize(object? sender, EventArgs e)
@@ -95,24 +121,30 @@ namespace DRW_Work_Tool
         private void PositionCloneTemplateButton()
         {
             if (_cloneTemplateHost == null ||
+                _cloneTemplateLayoutHost == null ||
                 _cloneTemplateButton == null ||
                 _cloneTemplateButton.IsDisposed)
             {
                 return;
             }
 
-            _cloneTemplateButton.Location = new Point(
-                Math.Max(
-                    12,
-                    _cloneTemplateHost.ClientSize.Width -
-                    _cloneTemplateButton.Width - 24),
-                18);
+            int x = Math.Max(
+                12,
+                _cloneTemplateLayoutHost.ClientSize.Width -
+                _cloneTemplateButton.Width - 16);
+
+            int y = Math.Max(
+                8,
+                (_cloneTemplateLayoutHost.ClientSize.Height -
+                 _cloneTemplateButton.Height) / 2);
+
+            _cloneTemplateButton.Location = new Point(x, y);
         }
 
         private void RemoveCloneTemplateButton()
         {
-            if (_cloneTemplateHost != null)
-                _cloneTemplateHost.Resize -= CloneTemplateHost_Resize;
+            if (_cloneTemplateLayoutHost != null)
+                _cloneTemplateLayoutHost.Resize -= CloneTemplateHost_Resize;
 
             if (_cloneTemplateButton != null)
             {
@@ -124,6 +156,7 @@ namespace DRW_Work_Tool
 
             _cloneTemplateButton = null;
             _cloneTemplateHost = null;
+            _cloneTemplateLayoutHost = null;
         }
 
         private void CloneSelectedEditorTemplate()
