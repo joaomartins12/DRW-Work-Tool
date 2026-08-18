@@ -644,9 +644,7 @@ namespace DRW_Work_Tool
                     Size =
                         new Size(
                             140,
-                            28),
-                    DropDownStyle =
-                        ComboBoxStyle.DropDownList
+                            28)
                 };
 
             combo.Items.Add(
@@ -660,7 +658,7 @@ namespace DRW_Work_Tool
         }
 
         private static int? SelectedBuffFilter(
-            ComboBox combo)
+            DarkComboBox combo)
         {
             if (combo.SelectedIndex <= 0)
                 return null;
