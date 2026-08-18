@@ -668,10 +668,19 @@ namespace DRW_Work_Tool
                     "Monster",
                     StringComparison.OrdinalIgnoreCase);
 
+            bool isBuff =
+                entity.Equals(
+                    "Buff",
+                    StringComparison.OrdinalIgnoreCase) ||
+                folderName.Equals(
+                    "Buff",
+                    StringComparison.OrdinalIgnoreCase);
+
             if (!isItemList &&
                 !isNpc &&
                 !isDigimonCore &&
-                !isMonsterCore)
+                !isMonsterCore &&
+                !isBuff)
             {
                 return;
             }
@@ -705,9 +714,11 @@ namespace DRW_Work_Tool
                     ? "btnImportDigimonCoreToDatabase"
                     : isMonsterCore
                         ? "btnImportMonsterCoreToDatabase"
-                        : isNpc
-                            ? "btnImportNpcToDatabase"
-                            : "btnImportItemListToDatabase";
+                        : isBuff
+                            ? "btnImportBuffToDatabase"
+                            : isNpc
+                                ? "btnImportNpcToDatabase"
+                                : "btnImportItemListToDatabase";
 
             button.Dock =
                 DockStyle.Fill;
@@ -754,6 +765,19 @@ namespace DRW_Work_Tool
                 button.Click +=
                     async (_, _) =>
                         await OpenMonsterDatabaseImportTabAndRunAsync(
+                            folder);
+            }
+            else if (isBuff)
+            {
+                editorToolTip.SetToolTip(
+                    button,
+                    "Importa Buff.xml para Asset.Buff. " +
+                    "O XML é validado completamente antes de qualquer DELETE. " +
+                    "A operação usa uma única transação SQL e executa ROLLBACK em caso de erro.");
+
+                button.Click +=
+                    async (_, _) =>
+                        await OpenBuffDatabaseImportTabAndRunAsync(
                             folder);
             }
             else if (isNpc)
@@ -811,6 +835,374 @@ namespace DRW_Work_Tool
                 importHost);
 
             importHost.BringToFront();
+        }
+
+        private async Task OpenBuffDatabaseImportTabAndRunAsync(
+            string buffFolder)
+        {
+            string connection;
+
+            try
+            {
+                connection =
+                    DatabaseConnectionStore.Load();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "Não foi possível ler a connection string cifrada.\r\n\r\n" +
+                    ex.Message,
+                    "Buff Database Importer",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(connection))
+            {
+                MessageBox.Show(
+                    "Configura primeiro a connection string em SETTINGS → SQL Server Database.",
+                    "Buff Database Importer",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+
+                ShowSettings(true);
+                return;
+            }
+
+            string buffXml =
+                Path.Combine(
+                    buffFolder,
+                    "Buff.xml");
+
+            if (!File.Exists(buffXml))
+            {
+                MessageBox.Show(
+                    "Buff.xml não foi encontrado:\r\n\r\n" +
+                    buffXml,
+                    "Buff Database Importer",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+
+                return;
+            }
+
+            if (MessageBox.Show(
+                    "BUFF -> DATABASE\r\n\r\n" +
+                    "A operação valida TODO o Buff.xml antes de tocar na database.\r\n" +
+                    "Só depois será iniciada uma única transação SQL.\r\n\r\n" +
+                    "Tabela substituída:\r\n" +
+                    "• Asset.Buff\r\n\r\n" +
+                    "Mapping principal:\r\n" +
+                    "• BuffId = s_dwID\r\n" +
+                    "• Name = s_szName\r\n" +
+                    "• DigimonSkillCode = s_dwDigimonSkillCode\r\n" +
+                    "• SkillCode = s_dwSkillCode\r\n" +
+                    "• MinLevel = s_nMinLv\r\n" +
+                    "• ConditionLevel = s_nConditionLv\r\n" +
+                    "• Class = s_nBuffClass\r\n" +
+                    "• Type = s_nBuffType\r\n" +
+                    "• LifeType = s_nBuffLifeType\r\n" +
+                    "• TimeType = s_nBuffTimeType\r\n\r\n" +
+                    "Campos sem coluna equivalente (Comment/Icon/Effect/Delete/unknown) permanecem apenas no XML.\r\n\r\n" +
+                    "Qualquer erro provoca ROLLBACK.\r\n\r\n" +
+                    "Continuar?",
+                    "Buff Database Importer",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning) != DialogResult.Yes)
+            {
+                return;
+            }
+
+            var page =
+                CreateDarkTab(
+                    "Buff DB Import [Running]");
+
+            var header =
+                new Panel
+                {
+                    Dock = DockStyle.Top,
+                    Height = 72,
+                    BackColor = CPanel
+                };
+
+            var status =
+                new Label
+                {
+                    Text =
+                        "VALIDATING — Buff.xml",
+                    ForeColor = CText,
+                    Font =
+                        new Font(
+                            "Segoe UI Semibold",
+                            9F,
+                            FontStyle.Bold),
+                    Location =
+                        new Point(
+                            14,
+                            0),
+                    Size =
+                        new Size(
+                            650,
+                            72),
+                    TextAlign =
+                        ContentAlignment.MiddleLeft,
+                    AutoEllipsis = true
+                };
+
+            var cancel =
+                CreateEditorActionButton(
+                    "CANCEL");
+
+            cancel.Size =
+                new Size(
+                    96,
+                    34);
+
+            cancel.Anchor =
+                AnchorStyles.Top |
+                AnchorStyles.Right;
+
+            void LayoutHeader()
+            {
+                cancel.Location =
+                    new Point(
+                        header.ClientSize.Width -
+                        cancel.Width -
+                        14,
+                        19);
+
+                status.Width =
+                    Math.Max(
+                        260,
+                        cancel.Left -
+                        status.Left -
+                        14);
+            }
+
+            header.Resize +=
+                (_, _) =>
+                    LayoutHeader();
+
+            var log =
+                new RichTextBox
+                {
+                    Dock = DockStyle.Fill,
+                    ReadOnly = true,
+                    BorderStyle =
+                        BorderStyle.None,
+                    BackColor =
+                        Color.FromArgb(
+                            10,
+                            10,
+                            10),
+                    ForeColor =
+                        Color.FromArgb(
+                            225,
+                            225,
+                            225),
+                    Font =
+                        new Font(
+                            "Consolas",
+                            8.5F),
+                    WordWrap = false
+                };
+
+            DarkUi.ApplyDarkScrollBar(
+                log);
+
+            header.Controls.Add(
+                status);
+
+            header.Controls.Add(
+                cancel);
+
+            page.Controls.Add(
+                log);
+
+            page.Controls.Add(
+                header);
+
+            editorTabs.TabPages.Add(
+                page);
+
+            editorTabs.SelectedTab =
+                page;
+
+            LayoutHeader();
+
+            databaseImportCancellation?.Cancel();
+            databaseImportCancellation?.Dispose();
+
+            databaseImportCancellation =
+                new CancellationTokenSource();
+
+            cancel.Click +=
+                (_, _) =>
+                    databaseImportCancellation.Cancel();
+
+            void AppendProgressLine(
+                string line)
+            {
+                if (log.IsDisposed)
+                    return;
+
+                int start =
+                    log.TextLength;
+
+                log.AppendText(
+                    line +
+                    Environment.NewLine);
+
+                log.Select(
+                    start,
+                    line.Length);
+
+                if (line.Contains(
+                        "WARNING",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    log.SelectionColor =
+                        Color.FromArgb(
+                            255,
+                            190,
+                            90);
+                }
+                else if (line.Contains(
+                             "VERIFY OK",
+                             StringComparison.OrdinalIgnoreCase) ||
+                         line.Contains(
+                             "concluíd",
+                             StringComparison.OrdinalIgnoreCase) ||
+                         line.Contains(
+                             "SUCCESS",
+                             StringComparison.OrdinalIgnoreCase))
+                {
+                    log.SelectionColor =
+                        Color.FromArgb(
+                            125,
+                            220,
+                            140);
+                }
+                else if (line.Contains(
+                             "ERRO",
+                             StringComparison.OrdinalIgnoreCase) ||
+                         line.Contains(
+                             "FALH",
+                             StringComparison.OrdinalIgnoreCase) ||
+                         line.Contains(
+                             "ROLLBACK",
+                             StringComparison.OrdinalIgnoreCase))
+                {
+                    log.SelectionColor =
+                        Color.FromArgb(
+                            255,
+                            95,
+                            95);
+                }
+                else
+                {
+                    log.SelectionColor =
+                        Color.FromArgb(
+                            225,
+                            225,
+                            225);
+                }
+
+                log.SelectionStart =
+                    log.TextLength;
+
+                log.SelectionColor =
+                    Color.FromArgb(
+                        225,
+                        225,
+                        225);
+
+                log.ScrollToCaret();
+            }
+
+            IProgress<string> progress =
+                new Progress<string>(
+                    AppendProgressLine);
+
+            SetDatabaseConnectionState(
+                DatabaseConnectionState.Checking,
+                "Importing...");
+
+            try
+            {
+                var service =
+                    new BuffDatabaseImportService();
+
+                BuffDatabaseImportSummary summary =
+                    await service.ImportAsync(
+                        connection,
+                        buffXml,
+                        progress,
+                        databaseImportCancellation.Token);
+
+                page.Text =
+                    "Buff DB Import [Success]";
+
+                status.Text =
+                    $"SUCCESS — Buff {summary.BuffRows:N0} rows";
+
+                SetDatabaseConnectionState(
+                    DatabaseConnectionState.Connected,
+                    "Connected");
+
+                MessageBox.Show(
+                    "Importação Buff concluída com sucesso.\r\n\r\n" +
+                    $"Buff rows: {summary.BuffRows:N0}\r\n" +
+                    $"BuffId duplicados preservados: {summary.DuplicateBuffIds:N0}\r\n" +
+                    $"Tempo: {summary.Elapsed.TotalSeconds:N1}s\r\n\r\n" +
+                    $"Log:\r\n{summary.LogFile}",
+                    "Buff Database Importer",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+            catch (OperationCanceledException)
+            {
+                page.Text =
+                    "Buff DB Import [Cancelled]";
+
+                status.Text =
+                    "IMPORT CANCELLED — transaction rolled back.";
+
+                SetDatabaseConnectionState(
+                    DatabaseConnectionState.Checking,
+                    "Cancelled");
+            }
+            catch (Exception ex)
+            {
+                page.Text =
+                    "Buff DB Import [Failed]";
+
+                status.Text =
+                    "IMPORT FAILED — see log below.";
+
+                AppendProgressLine(
+                    "[ERROR] " +
+                    ex);
+
+                SetDatabaseConnectionState(
+                    DatabaseConnectionState.Failed,
+                    "Import failed");
+
+                MessageBox.Show(
+                    "A importação Buff falhou.\r\n\r\n" +
+                    ex.Message +
+                    "\r\n\r\nSe a transação SQL já tinha começado, foi executado ROLLBACK. " +
+                    "Consulta o separador de log para os detalhes.",
+                    "Buff Database Importer",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            finally
+            {
+                cancel.Enabled = false;
+            }
         }
 
         private async Task OpenMonsterDatabaseImportTabAndRunAsync(

@@ -607,6 +607,32 @@ namespace DRW_Work_Tool
             }
 
             if (xmlFileName.Equals(
+                    "Buff.xml",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                if (existing != null)
+                {
+                    string stateType =
+                        existing.Tag?.GetType().Name
+                        ?? string.Empty;
+
+                    if (stateType.Contains(
+                            "BuffBrowseState",
+                            StringComparison.Ordinal))
+                    {
+                        editorTabs.SelectedTab = existing;
+                        return;
+                    }
+
+                    editorTabs.TabPages.Remove(existing);
+                    existing.Dispose();
+                }
+
+                OpenBuffBrowser(xmlPath);
+                return;
+            }
+
+            if (xmlFileName.Equals(
                     "Monster.xml",
                     StringComparison.OrdinalIgnoreCase))
             {
@@ -3687,6 +3713,30 @@ namespace DRW_Work_Tool
 
         private bool CanCloseEditorPage(TabPage page)
         {
+            if (page.Tag is BuffEditState buffState &&
+                buffState.Dirty)
+            {
+                DialogResult result =
+                    MessageBox.Show(
+                        "There are unsaved changes in this Buff.xml entry.\n\n" +
+                        "YES = Save and close\n" +
+                        "NO = Close without saving\n" +
+                        "CANCEL = Return to editor",
+                        "Unsaved Buff Changes",
+                        MessageBoxButtons.YesNoCancel,
+                        MessageBoxIcon.Warning);
+
+                if (result == DialogResult.Cancel)
+                    return false;
+
+                if (result == DialogResult.Yes)
+                    return SaveBuffEditor(
+                        buffState,
+                        showSuccess: false);
+
+                return true;
+            }
+
             if (page.Tag is SkillEditState skillState &&
                 skillState.Dirty)
             {

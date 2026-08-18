@@ -40,6 +40,9 @@ namespace DRW_Work_Tool.Core
         private static BuffReferenceService? _buffReferences;
         private static string _buffReferencePath = string.Empty;
 
+        private static BuffEditorService? _buffEditor;
+        private static string _buffEditorPath = string.Empty;
+
         private static DigimonEvoEditorService? _digimonEvo;
         private static string _digimonEvoPath = string.Empty;
 
@@ -67,8 +70,6 @@ namespace DRW_Work_Tool.Core
                     return
                         _itemList != null &&
                         _references != null &&
-                        _digimonModels != null &&
-                        _digimonList != null &&
                         _preloadError == null;
             }
         }
@@ -197,6 +198,92 @@ namespace DRW_Work_Tool.Core
         {
             lock (Sync)
                 return _buffReferences;
+        }
+
+        public static async Task<BuffEditorService>
+            GetBuffEditorAsync(
+                string filePath)
+        {
+            string full =
+                Path.GetFullPath(
+                    filePath);
+
+            Task? preload;
+
+            lock (Sync)
+                preload = _preloadTask;
+
+            if (preload != null)
+            {
+                try
+                {
+                    await preload.ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Normal open-on-demand fallback below.
+                }
+            }
+
+            lock (Sync)
+            {
+                if (_buffEditor != null &&
+                    _buffEditorPath.Equals(
+                        full,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return _buffEditor;
+                }
+            }
+
+            return await Task.Run(
+                () =>
+                {
+                    BuffEditorService loaded =
+                        BuffEditorService.Load(
+                            full);
+
+                    lock (Sync)
+                    {
+                        _buffEditor = loaded;
+                        _buffEditorPath = full;
+                    }
+
+                    return loaded;
+                })
+                .ConfigureAwait(false);
+        }
+
+        public static BuffEditorService?
+            TryGetBuffEditor()
+        {
+            lock (Sync)
+                return _buffEditor;
+        }
+
+        public static void ReplaceBuffEditor(
+            string filePath,
+            BuffEditorService service)
+        {
+            string full =
+                Path.GetFullPath(
+                    filePath);
+
+            lock (Sync)
+            {
+                _buffEditor = service;
+                _buffEditorPath = full;
+            }
+        }
+
+        public static void InvalidateBuffEditor()
+        {
+            lock (Sync)
+            {
+                _buffEditor = null;
+                _buffEditorPath =
+                    string.Empty;
+            }
         }
 
         public static async Task<SkillEditorService>
@@ -1186,11 +1273,71 @@ namespace DRW_Work_Tool.Core
                                 Path.GetFullPath(
                                     buffPath);
                         }
+
+                        BuffEditorService buffEditor =
+                            BuffEditorService.Load(
+                                buffPath);
+
+                        lock (Sync)
+                        {
+                            _buffEditor =
+                                buffEditor;
+
+                            _buffEditorPath =
+                                Path.GetFullPath(
+                                    buffPath);
+                        }
                     }
                 }
                 catch
                 {
                     // Selector keeps an open-on-demand fallback.
+                }
+            }
+
+            // Buff has its own visual editor and should be ready from the
+            // startup loading phase even if Skill.xml was unavailable.
+            string independentBuffPath =
+                Path.Combine(
+                    AppPaths.Xml,
+                    "Buff",
+                    "Buff.xml");
+
+            if (File.Exists(independentBuffPath))
+            {
+                try
+                {
+                    string fullBuffPath =
+                        Path.GetFullPath(
+                            independentBuffPath);
+
+                    bool needsBuffEditor;
+
+                    lock (Sync)
+                    {
+                        needsBuffEditor =
+                            _buffEditor == null ||
+                            !_buffEditorPath.Equals(
+                                fullBuffPath,
+                                StringComparison.OrdinalIgnoreCase);
+                    }
+
+                    if (needsBuffEditor)
+                    {
+                        BuffEditorService buffEditor =
+                            BuffEditorService.Load(
+                                fullBuffPath);
+
+                        lock (Sync)
+                        {
+                            _buffEditor = buffEditor;
+                            _buffEditorPath = fullBuffPath;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Buff browser keeps an open-on-demand fallback.
                 }
             }
 
@@ -1311,7 +1458,7 @@ namespace DRW_Work_Tool.Core
             Report(
                 progress,
                 90,
-                "Loading Monster.xml database...");
+                "Loading Monster.xml database (data cache only)...");
 
             if (File.Exists(monsterPath))
             {
@@ -1335,7 +1482,7 @@ namespace DRW_Work_Tool.Core
             Report(
                 progress,
                 91,
-                "Loading MonstersSkill.xml mechanics...");
+                "Loading MonstersSkill.xml mechanics (data cache only)...");
 
             if (File.Exists(monsterSkillPath))
             {
@@ -1400,42 +1547,25 @@ namespace DRW_Work_Tool.Core
             Report(
                 progress,
                 93,
-                "Loading complete Digimon model catalog from Model.xml...");
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            // Model.xml is a core editor dependency. Do not silently continue
-            // with a half-initialized application: the Digimon model picker,
-            // Monster editor and Digimon_List editor all depend on this index.
-            DigimonModelReferenceService models;
+                "Loading Digimon models from Model.xml...");
 
             try
             {
-                models =
+                DigimonModelReferenceService models =
                     DigimonModelReferenceService.Load(
                         File.Exists(modelPath)
                             ? modelPath
                             : null);
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidDataException(
-                    "Required Model.xml Digimon model catalog could not be preloaded. " +
-                    "The main editor will not open with an incomplete model cache.",
-                    ex);
-            }
 
-            lock (Sync)
-            {
-                _digimonModels = models;
-                _digimonModelPath =
-                    models.SourcePath;
+                lock (Sync)
+                {
+                    _digimonModels = models;
+                    _digimonModelPath = models.SourcePath;
+                }
             }
-
-            Report(
-                progress,
-                94,
-                $"Digimon model catalog ready: {models.Models.Count:N0} Data\\Digimon models.");
+            catch
+            {
+            }
 
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -1464,11 +1594,9 @@ namespace DRW_Work_Tool.Core
                                 digimonListPath);
                     }
                 }
-                catch (Exception ex)
+                catch
                 {
-                    throw new InvalidDataException(
-                        "Required Digimon_List.xml image/reference cache could not be preloaded.",
-                        ex);
+                    // Opening the editor still has a background fallback.
                 }
             }
 
