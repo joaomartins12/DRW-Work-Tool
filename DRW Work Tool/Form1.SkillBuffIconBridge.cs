@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
@@ -75,7 +76,7 @@ namespace DRW_Work_Tool
 
             editorToolTip.SetToolTip(
                 browse,
-                "Open the sicon01-sicon07 DDS atlases. Click a mapped slot and CONFIRM to apply its Icon ID.");
+                "Open the sicon01-sicon07 skill atlases. Click a mapped slot and CONFIRM to apply its Icon ID.");
 
             browse.Click += async (_, _) =>
             {
@@ -237,7 +238,7 @@ namespace DRW_Work_Tool
 
             var loading = new EditorLoadingView(
                 "Loading Skill Icon Atlases",
-                "Preparing sicon01-sicon07 DDS atlases and their mapped Icon IDs.");
+                "Preparing sicon01-sicon07 skill atlases and their mapped Icon IDs.");
 
             page.Controls.Add(loading);
             editorTabs.TabPages.Add(page);
@@ -412,7 +413,7 @@ namespace DRW_Work_Tool
                 SharedSkillAtlasInfo atlas = state.Atlases[state.AtlasIndex];
                 if (!state.BitmapCache.TryGetValue(atlas.SourcePath, out Bitmap? bitmap))
                 {
-                    bitmap = DdsImageLoader.LoadBitmap(atlas.SourcePath);
+                    bitmap = LoadSharedSkillAtlasBitmap(atlas.SourcePath);
                     state.BitmapCache[atlas.SourcePath] = bitmap;
                 }
                 picture.Image = bitmap;
@@ -494,15 +495,97 @@ namespace DRW_Work_Tool
             return await completion.Task;
         }
 
+        private static Bitmap LoadSharedSkillAtlasBitmap(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                throw new InvalidDataException("Skill atlas path is empty.");
+
+            if (!File.Exists(path))
+                throw new FileNotFoundException(
+                    "Skill atlas file was not found.",
+                    path);
+
+            string extension =
+                Path.GetExtension(path);
+
+            if (extension.Equals(
+                    ".dds",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return DdsImageLoader.LoadBitmap(path);
+            }
+
+            if (extension.Equals(
+                    ".tga",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return TgaImageLoader.LoadBitmap(path);
+            }
+
+            if (extension.Equals(
+                    ".bmp",
+                    StringComparison.OrdinalIgnoreCase) ||
+                extension.Equals(
+                    ".png",
+                    StringComparison.OrdinalIgnoreCase) ||
+                extension.Equals(
+                    ".jpg",
+                    StringComparison.OrdinalIgnoreCase) ||
+                extension.Equals(
+                    ".jpeg",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                using var source = new Bitmap(path);
+                return new Bitmap(source);
+            }
+
+            using (var stream = File.OpenRead(path))
+            {
+                if (stream.Length >= 4)
+                {
+                    int d0 = stream.ReadByte();
+                    int d1 = stream.ReadByte();
+                    int d2 = stream.ReadByte();
+                    int d3 = stream.ReadByte();
+
+                    if (d0 == (byte)'D' &&
+                        d1 == (byte)'D' &&
+                        d2 == (byte)'S' &&
+                        d3 == (byte)' ')
+                    {
+                        return DdsImageLoader.LoadBitmap(path);
+                    }
+                }
+            }
+
+            try
+            {
+                using var source = new Bitmap(path);
+                return new Bitmap(source);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidDataException(
+                    $"Unsupported or invalid skill atlas '{Path.GetFileName(path)}'. " +
+                    "Expected sicon01-sicon07 in DDS, TGA or BMP format.",
+                    ex);
+            }
+        }
+
         private static List<SharedSkillAtlasInfo> LoadSharedSkillAtlases()
         {
             var database = new ImageDatabaseIndexService();
             database.Load(rebuildIndexIfMissing: true);
 
+            HashSet<string> allowedAtlases =
+                Enumerable.Range(1, 7)
+                    .Select(i => $"sicon{i:00}")
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
             IEnumerable<InterfaceIconMapEntry> mappings = database.InterfaceMap.Icons
                 .Where(x =>
                     x.Category.Equals("Skill", StringComparison.OrdinalIgnoreCase) &&
-                    x.Atlas.StartsWith("sicon", StringComparison.OrdinalIgnoreCase));
+                    allowedAtlases.Contains(x.Atlas));
 
             var result = new List<SharedSkillAtlasInfo>();
             foreach (IGrouping<string, InterfaceIconMapEntry> group in mappings
