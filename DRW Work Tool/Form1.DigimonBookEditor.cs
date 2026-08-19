@@ -365,7 +365,7 @@ namespace DRW_Work_Tool
                         new XElement("s_szDestDigimonName", Convert.ToString(r.Cells[4].Value) ?? "")));
                     count++;
                 }
-                Set(working,"s_nVal",count.ToString(CultureInfo.InvariantCulture));
+                BookSet(working,"s_nVal",count.ToString(CultureInfo.InvariantCulture));
                 ReplaceRecordAndSave(state, original, working); form.DialogResult=DialogResult.OK; form.Close();
             };
             form.Controls.Add(save); form.ShowDialog(this);
@@ -392,7 +392,7 @@ namespace DRW_Work_Tool
             Button save=CreateEditorActionButton("SAVE"); save.Location=new Point(716,510); save.Size=new Size(110,34);
             save.Click += (_,_) =>
             {
-                Set(working,"s_nGroupIdx",group.Text); Set(working,"s_szGroupName",name.Text); Set(working,"s_szExplain",explain.Text);
+                BookSet(working,"s_nGroupIdx",group.Text); BookSet(working,"s_szGroupName",name.Text); BookSet(working,"s_szExplain",explain.Text);
                 SetArray(working,"s_nCondition","condition",grid,1); SetArray(working,"s_nAT_Type","atType",grid,2); SetArray(working,"s_nOption","option",grid,3);
                 SetArray(working,"s_nVal","value",grid,4); SetArray(working,"s_nProb","prob",grid,5); SetArray(working,"s_nTime","time",grid,6);
                 ReplaceRecordAndSave(state,original,working); form.DialogResult=DialogResult.OK; form.Close();
@@ -434,6 +434,6 @@ namespace DRW_Work_Tool
         private static string T(XElement e,string n)=>e.Element(n)?.Value??string.Empty;
         private static int[] A(XElement e,string p,string c)=>(e.Element(p)?.Elements(c)??Enumerable.Empty<XElement>()).Select(x=>int.TryParse(x.Value,out int v)?v:0).ToArray();
         private static int At(int[] a,int i)=>i<a.Length?a[i]:0;
-        private static void Set(XElement e,string n,string v){XElement? x=e.Element(n);if(x==null)e.Add(new XElement(n,v));else x.Value=v;}
+        private static void BookSet(XElement e,string n,string v){XElement? x=e.Element(n);if(x==null)e.Add(new XElement(n,v));else x.Value=v;}
     }
 }
