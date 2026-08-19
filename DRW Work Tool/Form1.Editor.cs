@@ -288,6 +288,17 @@ namespace DRW_Work_Tool
             if (!editorMode)
                 return;
 
+            // CashShop is a multi-XML visual editor. Opening the entity itself
+            // must go directly to the storefront-style workspace instead of
+            // exposing the raw XML file list first.
+            if (entity.Equals(
+                    "CashShop",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                _ = OpenCashShopVisualEditorAsync();
+                return;
+            }
+
             TabPage? existing = editorTabs.TabPages
                 .Cast<TabPage>()
                 .FirstOrDefault(x =>
