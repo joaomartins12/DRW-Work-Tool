@@ -1,0 +1,422 @@
+name: Apply Skill Importer Ground Truth
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch DigimonCoreDatabaseImportService
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("DRW Work Tool/Database/DigimonCoreDatabaseImportService.cs")
+          text = path.read_text(encoding="utf-8")
+
+          start = text.index("        private static void ReadSkills(")
+          end = text.index("        private static async Task ClearCoreTablesAsync(", start)
+
+          method = r'''        private static void ReadSkills(
+            XDocument document,
+            Dictionary<uint, List<SkillAssociation>> skillAssociations,
+            Action<string> log,
+            CancellationToken cancellationToken,
+            out List<SkillCodeRow> skillCodes,
+            out List<SkillApplyRow> skillApplies,
+            out List<SkillInfoRow> skillInfos,
+            out List<DigimonSkillRow> digimonSkills,
+            out int duplicateSkillIdsCollapsed,
+            out List<uint> missingSkillReferences,
+            out int sharedSkillAssociations)
+        {
+            XElement root =
+                document.Root ??
+                throw new InvalidDataException(
+                    "Skill.xml não possui root.");
+
+            if (!root.Name.LocalName.Equals(
+                    "SkillDataArray",
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Skill.xml root inválido: <{root.Name.LocalName}>. Esperado <SkillDataArray>.");
+            }
+
+            List<XElement> physical =
+                root.Elements("SkillData")
+                    .ToList();
+
+            if (physical.Count == 0)
+            {
+                throw new InvalidDataException(
+                    "Skill.xml não contém SkillData.");
+            }
+
+            var occurrences =
+                physical
+                    .Select(
+                        (node, index) =>
+                            new
+                            {
+                                Node = node,
+                                Index = index,
+                                SkillId = ReadUInt(node, "s_dwID", "SkillData")
+                            })
+                    .ToList();
+
+            if (occurrences.Any(x => x.SkillId == 0))
+            {
+                throw new InvalidDataException(
+                    "Skill.xml contém s_dwID=0.");
+            }
+
+            List<XElement> unique =
+                occurrences
+                    .GroupBy(x => x.SkillId)
+                    .Select(g => g.First().Node)
+                    .ToList();
+
+            duplicateSkillIdsCollapsed =
+                physical.Count - unique.Count;
+
+            foreach (IGrouping<uint, dynamic> duplicate in
+                occurrences
+                    .GroupBy(x => x.SkillId)
+                    .Where(g => g.Count() > 1))
+            {
+                log(
+                    $"INFO: Skill.xml contém {duplicate.Count()} ocorrências físicas de s_dwID={duplicate.Key}. " +
+                    "SkillCode/SkillCodeApply usam a primeira ocorrência; SkillInfo preserva todas as ocorrências físicas.");
+            }
+
+            skillCodes = new List<SkillCodeRow>(unique.Count);
+            skillApplies = new List<SkillApplyRow>(unique.Count * 3);
+            skillInfos = new List<SkillInfoRow>();
+            digimonSkills = new List<DigimonSkillRow>();
+
+            int skillCodeAssetId = 0;
+            int applyId = 0;
+            int skillInfoId = 0;
+            int digimonSkillId = 0;
+            sharedSkillAssociations = 0;
+
+            var uniqueIds =
+                unique
+                    .Select(x => ReadUInt(x, "s_dwID", "SkillData"))
+                    .ToHashSet();
+
+            missingSkillReferences =
+                skillAssociations.Keys
+                    .Where(x => !uniqueIds.Contains(x))
+                    .OrderBy(x => x)
+                    .ToList();
+
+            var firstNodeBySkillId =
+                unique.ToDictionary(
+                    x => ReadUInt(x, "s_dwID", "SkillData"));
+
+            // -------------------------------------------------------------
+            // SkillCode + SkillCodeApply + DigimonSkill + primary SkillInfo
+            // -------------------------------------------------------------
+            foreach (XElement node in unique)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                uint skillId = ReadUInt(node, "s_dwID", "SkillData");
+                int sqlSkillId = CheckedInt(skillId, $"Skill {skillId}");
+
+                skillCodeAssetId++;
+
+                skillCodes.Add(
+                    new SkillCodeRow
+                    {
+                        Id = skillCodeAssetId,
+                        SkillCode = sqlSkillId,
+                        Comment = ReadOptionalText(node, "s_szComment")
+                    });
+
+                List<XElement> applies =
+                    node.Element("SkillApply")?
+                        .Elements("IncreaseApply")
+                        .ToList()
+                    ?? throw new InvalidDataException(
+                        $"Skill {skillId}: SkillApply ausente.");
+
+                if (applies.Count != 3)
+                {
+                    throw new InvalidDataException(
+                        $"Skill {skillId}: esperado exatamente 3 IncreaseApply; encontrado {applies.Count}.");
+                }
+
+                for (int i = 0; i < 3; i++)
+                {
+                    XElement apply = applies[i];
+                    applyId++;
+
+                    skillApplies.Add(
+                        new SkillApplyRow
+                        {
+                            Id = applyId,
+
+                            // Restored DB ground truth (19,563/19,563 rows):
+                            // Type=s_nID and Attribute=s_nA.
+                            Type = ReadInt(apply, "s_nID", $"Skill {skillId} Apply {i + 1}"),
+                            Attribute = ReadInt(apply, "s_nA", $"Skill {skillId} Apply {i + 1}"),
+                            Value = ReadInt(apply, "s_nB", $"Skill {skillId} Apply {i + 1}"),
+                            AdditionalValue = ReadInt(apply, "s_nC", $"Skill {skillId} Apply {i + 1}"),
+                            SkillCodeAssetId = skillCodeAssetId,
+                            IncreaseValue = ReadInt(apply, "s_nIncrease_B_Point", $"Skill {skillId} Apply {i + 1}"),
+                            Chance = ReadInt(apply, "s_nInvoke_Rate", $"Skill {skillId} Apply {i + 1}") / 100
+                        });
+                }
+
+                List<SkillAssociation> orderedAssociations =
+                    skillAssociations.TryGetValue(
+                        skillId,
+                        out List<SkillAssociation>? associations) &&
+                    associations.Count > 0
+                        ? associations
+                            .Distinct(SkillAssociationComparer.Instance)
+                            .OrderBy(x => x.DigimonType)
+                            .ThenBy(x => x.Slot)
+                            .ToList()
+                        : new List<SkillAssociation>();
+
+                if (orderedAssociations.Count == 0)
+                {
+                    digimonSkillId++;
+                    digimonSkills.Add(
+                        new DigimonSkillRow
+                        {
+                            Id = digimonSkillId,
+                            Type = 0,
+                            Slot = 0,
+                            SkillId = sqlSkillId
+                        });
+
+                    skillInfoId++;
+                    skillInfos.Add(
+                        BuildSkillInfoRow(
+                            skillInfoId,
+                            node,
+                            skillId,
+                            sqlSkillId,
+                            0));
+                }
+                else
+                {
+                    if (orderedAssociations.Count > 1)
+                        sharedSkillAssociations += orderedAssociations.Count - 1;
+
+                    foreach (SkillAssociation association in orderedAssociations)
+                    {
+                        int digimonType =
+                            CheckedInt(
+                                association.DigimonType,
+                                $"DigimonSkill Skill {skillId}");
+
+                        digimonSkillId++;
+                        digimonSkills.Add(
+                            new DigimonSkillRow
+                            {
+                                Id = digimonSkillId,
+                                Type = digimonType,
+                                Slot = association.Slot,
+                                SkillId = sqlSkillId
+                            });
+
+                        // Restored DB ground truth: SkillInfo.Type follows the
+                        // Digimon association, not SkillData.s_nAttType.
+                        skillInfoId++;
+                        skillInfos.Add(
+                            BuildSkillInfoRow(
+                                skillInfoId,
+                                node,
+                                skillId,
+                                sqlSkillId,
+                                digimonType));
+                    }
+                }
+            }
+
+            // -------------------------------------------------------------
+            // Additional physical duplicate SkillData -> SkillInfo only.
+            // Ground-truth DB has 6,951 SkillInfo vs 6,949 DigimonSkill because
+            // the two extra physical SkillData occurrences are preserved here.
+            // -------------------------------------------------------------
+            var seenPhysicalIds = new HashSet<uint>();
+
+            foreach (var occurrence in occurrences)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (seenPhysicalIds.Add(occurrence.SkillId))
+                    continue;
+
+                uint skillId = occurrence.SkillId;
+                int sqlSkillId = CheckedInt(skillId, $"Skill {skillId}");
+
+                skillInfoId++;
+                skillInfos.Add(
+                    BuildSkillInfoRow(
+                        skillInfoId,
+                        occurrence.Node,
+                        skillId,
+                        sqlSkillId,
+                        0));
+            }
+
+            if (skillApplies.Count != skillCodes.Count * 3)
+            {
+                throw new InvalidDataException(
+                    "Skill validation interna: SkillCodeApply != SkillCode * 3.");
+            }
+
+            int expectedPrimarySkillInfos =
+                digimonSkills.Count;
+
+            int expectedSkillInfos =
+                expectedPrimarySkillInfos + duplicateSkillIdsCollapsed;
+
+            if (skillInfos.Count != expectedSkillInfos)
+            {
+                throw new InvalidDataException(
+                    $"SkillInfo cardinality inválida: esperado {expectedSkillInfos:N0} " +
+                    $"(DigimonSkill {digimonSkills.Count:N0} + duplicates {duplicateSkillIdsCollapsed:N0}), " +
+                    $"gerado {skillInfos.Count:N0}.");
+            }
+
+            log(
+                $"Skill physical={physical.Count:N0}, unique={unique.Count:N0}, " +
+                $"extra physical SkillInfo={duplicateSkillIdsCollapsed:N0}.");
+
+            log(
+                $"DigimonSkill={digimonSkills.Count:N0}; shared extra associations={sharedSkillAssociations:N0}; " +
+                "skills sem associação usam Type=0/Slot=0.");
+
+            log(
+                $"SkillInfo={skillInfos.Count:N0}; cardinality = DigimonSkill ({digimonSkills.Count:N0}) + " +
+                $"physical duplicates ({duplicateSkillIdsCollapsed:N0}).");
+
+            log(
+                "SkillCodeApply ground truth: Type=s_nID, Attribute=s_nA, Value=s_nB, " +
+                "AdditionalValue=s_nC, IncreaseValue=s_nIncrease_B_Point, Chance=s_nInvoke_Rate/100.");
+
+            log(
+                "SkillInfo ground truth: Value=0, CastingTime=0, MemoryChips=0; " +
+                "Conditions=IncreaseApply s_nB 1/2/3; Type=Digimon association Type (ou 0 sem associação)." );
+        }
+
+        private static SkillInfoRow BuildSkillInfoRow(
+            int id,
+            XElement node,
+            uint skillId,
+            int sqlSkillId,
+            int digimonType)
+        {
+            List<XElement> applies =
+                node.Element("SkillApply")?
+                    .Elements("IncreaseApply")
+                    .ToList()
+                ?? throw new InvalidDataException(
+                    $"Skill {skillId}: SkillApply ausente.");
+
+            if (applies.Count != 3)
+            {
+                throw new InvalidDataException(
+                    $"Skill {skillId}: esperado exatamente 3 IncreaseApply; encontrado {applies.Count}.");
+            }
+
+            return new SkillInfoRow
+            {
+                Id = id,
+                SkillId = sqlSkillId,
+                Name = ReadOptionalText(node, "s_szName"),
+                DSUsage = ReadInt(node, "s_nUseDS", $"Skill {skillId}"),
+                HPUsage = ReadInt(node, "s_nUseHP", $"Skill {skillId}"),
+
+                // Exact restored-DB mapping: these three columns are constant 0.
+                Value = 0,
+                CastingTime = 0,
+
+                Cooldown = ReadIntLikeDecimal(node, "s_fCooldownTime", $"Skill {skillId}"),
+                MaxLevel = ReadInt(node, "s_nMaxLevel", $"Skill {skillId}"),
+                RequiredPoints = ReadInt(node, "s_nLevelupPoint", $"Skill {skillId}"),
+                Target = ReadInt(node, "s_nTarget", $"Skill {skillId}"),
+                AreaOfEffect = ReadInt(node, "s_nAttSphere", $"Skill {skillId}"),
+                AoEMinDamage = ReadIntLikeDecimal(node, "s_fAttRange_MinDmg", $"Skill {skillId}"),
+                AoEMaxDamage = ReadIntLikeDecimal(node, "s_fAttRange_MaxDmg", $"Skill {skillId}"),
+                Range = ReadIntLikeDecimal(node, "s_fAttRange", $"Skill {skillId}"),
+                UnlockLevel = ReadInt(node, "s_nLimitLevel", $"Skill {skillId}"),
+                MemoryChips = 0,
+                FirstConditionCode = ReadInt(applies[0], "s_nB", $"Skill {skillId} Apply 1"),
+                SecondConditionCode = ReadInt(applies[1], "s_nB", $"Skill {skillId} Apply 2"),
+                ThirdConditionCode = ReadInt(applies[2], "s_nB", $"Skill {skillId} Apply 3"),
+                Type = digimonType,
+                Description = ReadOptionalText(node, "s_szComment"),
+                FamilyType = ReadInt(node, "s_nFamilyType", $"Skill {skillId}"),
+                SkillType = ReadInt(node, "s_nSkillType", $"Skill {skillId}")
+            };
+        }
+
+'''
+
+          # Avoid C# dynamic/IGrouping incompatibility by replacing the temporary
+          # diagnostic-only grouping loop with a normal dictionary-based loop.
+          method = method.replace(
+          '''            foreach (IGrouping<uint, dynamic> duplicate in
+                occurrences
+                    .GroupBy(x => x.SkillId)
+                    .Where(g => g.Count() > 1))
+            {
+                log(
+                    $"INFO: Skill.xml contém {duplicate.Count()} ocorrências físicas de s_dwID={duplicate.Key}. " +
+                    "SkillCode/SkillCodeApply usam a primeira ocorrência; SkillInfo preserva todas as ocorrências físicas.");
+            }
+''',
+          '''            foreach (var duplicate in
+                occurrences
+                    .GroupBy(x => x.SkillId)
+                    .Where(g => g.Count() > 1))
+            {
+                log(
+                    $"INFO: Skill.xml contém {duplicate.Count()} ocorrências físicas de s_dwID={duplicate.Key}. " +
+                    "SkillCode/SkillCodeApply usam a primeira ocorrência; SkillInfo preserva todas as ocorrências físicas.");
+            }
+''')
+
+          text = text[:start] + method + text[end:]
+
+          # Old log is no longer true because CastingTime is intentionally 0.
+          text = text.replace(
+          '''            log(
+                "SkillInfo CastingTime validado antes do SQL. " +
+                "O sentinel/anomalia 107479040 é normalizado para 0 apenas no import.");
+''',
+          '''            log(
+                "SkillInfo mapping restaurado a partir da DB funcional: " +
+                "Value=0, CastingTime=0 e MemoryChips=0; Type segue DigimonSkill.Type.");
+''')
+
+          path.write_text(text, encoding="utf-8")
+
+      - name: Commit patch and remove temporary workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "DRW Work Tool/Database/DigimonCoreDatabaseImportService.cs"
+          git rm .github/workflows/temporary-apply-skill-importer-ground-truth.yml
+          git commit -m "Fix Skill importer from restored database ground truth"
+          git push origin master
