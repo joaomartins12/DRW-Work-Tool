@@ -9,7 +9,8 @@ namespace DRW_Work_Tool.Core
 {
     /// <summary>
     /// Cash Shop icon loader that deliberately uses DDS atlas variants.
-    /// It resolves only Cash Shop icon mappings and never substitutes ItemList icons.
+    /// CashShop atlases are physically 15x15 (480x480), while nIconID uses
+    /// a logical 10x10 address in the final two digits (00..99).
     /// </summary>
     public static class CashShopDdsIconCache
     {
@@ -38,12 +39,8 @@ namespace DRW_Work_Tool.Core
                     .Where(x => NormalizeId(x.Id) == normalized)
                     .Where(x =>
                         x.Category.Equals("CashShop", StringComparison.OrdinalIgnoreCase) ||
-                        x.Atlas.Contains("cash", StringComparison.OrdinalIgnoreCase) ||
-                        x.Atlas.Contains("shop", StringComparison.OrdinalIgnoreCase))
+                        x.Atlas.StartsWith("cashshop", StringComparison.OrdinalIgnoreCase))
                     .OrderByDescending(x => x.Category.Equals("CashShop", StringComparison.OrdinalIgnoreCase))
-                    .ThenByDescending(x =>
-                        x.Atlas.Contains("cash", StringComparison.OrdinalIgnoreCase) ||
-                        x.Atlas.Contains("shop", StringComparison.OrdinalIgnoreCase))
                     .FirstOrDefault();
 
                 if (mapping == null)
@@ -72,7 +69,26 @@ namespace DRW_Work_Tool.Core
                 }
 
                 Bitmap atlasBitmap = GetAtlas(ddsPath);
-                var source = new Rectangle(mapping.X, mapping.Y, mapping.Width, mapping.Height);
+
+                int sourceWidth = atlas.TileWidth > 0 ? atlas.TileWidth : mapping.Width;
+                int sourceHeight = atlas.TileHeight > 0 ? atlas.TileHeight : mapping.Height;
+                int sourceX = mapping.X;
+                int sourceY = mapping.Y;
+
+                // IMPORTANT:
+                // cashshopG_PPP.dds is 480x480 / 15x15 physically, but the CashShop ID
+                // namespace is GPPP00..GPPP99. Therefore the two trailing digits are a
+                // logical 10x10 slot, NOT a row-major index using atlas.Columns (15).
+                // Recalculate here so even an old InterfaceIconMap.json remains usable.
+                if (mapping.Category.Equals("CashShop", StringComparison.OrdinalIgnoreCase) ||
+                    mapping.Atlas.StartsWith("cashshop", StringComparison.OrdinalIgnoreCase))
+                {
+                    int logicalSlot = (int)(iconId % 100u);
+                    sourceX = (logicalSlot % 10) * sourceWidth;
+                    sourceY = (logicalSlot / 10) * sourceHeight;
+                }
+
+                var source = new Rectangle(sourceX, sourceY, sourceWidth, sourceHeight);
 
                 if (source.Width <= 0 ||
                     source.Height <= 0 ||
@@ -81,6 +97,10 @@ namespace DRW_Work_Tool.Core
                     source.Right > atlasBitmap.Width ||
                     source.Bottom > atlasBitmap.Height)
                 {
+                    AppLogger.Warning(
+                        $"Cash Shop DDS icon {iconId} has invalid source rectangle " +
+                        $"{source.X},{source.Y},{source.Width},{source.Height} in {mapping.Atlas} " +
+                        $"({atlasBitmap.Width}x{atlasBitmap.Height}).");
                     Cache(iconId, null);
                     return null;
                 }
