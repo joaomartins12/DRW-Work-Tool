@@ -68,10 +68,12 @@ namespace DRW_Work_Tool
                 if (page.IsDisposed)
                     continue;
 
-                if (page.Tag is EntityTabState state &&
-                    state.Entity.Equals("CashShop", StringComparison.OrdinalIgnoreCase))
+                if (page.Tag is EntityTabState state)
                 {
-                    EnsureCashShopDirectOpenButton(page);
+                    if (state.Entity.Equals("CashShop", StringComparison.OrdinalIgnoreCase))
+                        EnsureCashShopDirectOpenButton(page);
+                    else if (state.Entity.Equals("Digimon_Book", StringComparison.OrdinalIgnoreCase))
+                        EnsureDigimonBookOpenButtons(page);
                 }
                 else if (page.Tag is CashShopBrowseState cashShop)
                 {
