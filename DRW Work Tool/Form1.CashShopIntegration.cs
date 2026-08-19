@@ -8,6 +8,7 @@ namespace DRW_Work_Tool
     {
         private bool _cashShopIntegrationReady;
         private bool _cashShopRefreshPending;
+        private System.Windows.Forms.Timer? _cashShopIntegrationTimer;
 
         protected override void OnHandleCreated(EventArgs e)
         {
@@ -25,6 +26,21 @@ namespace DRW_Work_Tool
 
                 editorTabs.SelectedIndexChanged += (_, _) => QueueCashShopIntegrationRefresh();
                 editorTabs.ControlAdded += (_, _) => QueueCashShopIntegrationRefresh();
+
+                _cashShopIntegrationTimer = new System.Windows.Forms.Timer
+                {
+                    Interval = 500
+                };
+                _cashShopIntegrationTimer.Tick += (_, _) => RefreshCashShopIntegration();
+                _cashShopIntegrationTimer.Start();
+
+                Disposed += (_, _) =>
+                {
+                    _cashShopIntegrationTimer?.Stop();
+                    _cashShopIntegrationTimer?.Dispose();
+                    _cashShopIntegrationTimer = null;
+                };
+
                 QueueCashShopIntegrationRefresh();
             }));
         }
