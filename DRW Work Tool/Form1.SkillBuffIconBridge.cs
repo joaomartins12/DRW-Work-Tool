@@ -19,7 +19,9 @@ namespace DRW_Work_Tool
         protected override void OnActivated(EventArgs e)
         {
             base.OnActivated(e);
+            InitializeEditorPolish();
             InitializeSkillBuffIconBridge();
+            RefreshEditorPolish();
             RefreshSkillBuffIconBridge();
         }
 
