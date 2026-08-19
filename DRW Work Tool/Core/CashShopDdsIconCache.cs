@@ -7,6 +7,11 @@ using System.Linq;
 
 namespace DRW_Work_Tool.Core
 {
+    public sealed record CashShopIconAtlasPage(
+        string AtlasName,
+        uint BaseIconId,
+        IReadOnlyList<uint> IconIds);
+
     /// <summary>
     /// Loads Cash Shop icons directly from cashshopG_PPP DDS atlases.
     /// Verified from the original TGA guide atlases:
@@ -119,6 +124,67 @@ namespace DRW_Work_Tool.Core
         }
 
         /// <summary>
+        /// Returns every physical Cash Shop atlas that has a DDS variant.
+        /// Each page exposes exactly the 36 valid IDs represented by its 6x6 grid.
+        /// </summary>
+        public static IReadOnlyList<CashShopIconAtlasPage> GetAtlasPages()
+        {
+            try
+            {
+                ImageDatabaseIndexService database = GetDatabase();
+                var pages = new List<CashShopIconAtlasPage>();
+
+                foreach (InterfaceAtlasEntry atlas in database.Index.InterfaceAtlases
+                             .Where(x => x.Name.StartsWith("cashshop", StringComparison.OrdinalIgnoreCase))
+                             .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+                {
+                    if (!TryParseAtlasBaseId(atlas.Name, out uint baseId))
+                        continue;
+
+                    bool hasDds = atlas.Files
+                        .Select(x => ResolvePath(database.DatabaseRoot, x))
+                        .Any(x => File.Exists(x) && Path.GetExtension(x).Equals(".dds", StringComparison.OrdinalIgnoreCase));
+
+                    if (!hasDds)
+                        continue;
+
+                    pages.Add(new CashShopIconAtlasPage(
+                        atlas.Name,
+                        baseId,
+                        Enumerable.Range(0, CashShopSlots)
+                            .Select(slot => baseId + (uint)slot)
+                            .ToList()));
+                }
+
+                return pages;
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Warning($"Cash Shop atlas list could not be loaded: {ex.Message}");
+                return Array.Empty<CashShopIconAtlasPage>();
+            }
+        }
+
+        public static bool IsValidIconId(uint iconId)
+        {
+            if (!TryResolveAtlasAndSlot(iconId, out string atlasName, out _))
+                return false;
+
+            try
+            {
+                ImageDatabaseIndexService database = GetDatabase();
+                InterfaceAtlasEntry? atlas = database.GetAtlas(atlasName);
+                return atlas != null && atlas.Files
+                    .Select(x => ResolvePath(database.DatabaseRoot, x))
+                    .Any(x => File.Exists(x) && Path.GetExtension(x).Equals(".dds", StringComparison.OrdinalIgnoreCase));
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Converts an nIconID into its atlas name and physical slot.
         /// Example: 210210 => cashshop2_102, slot 10.
         /// Example: 510423 => cashshop5_104, slot 23.
@@ -134,8 +200,6 @@ namespace DRW_Work_Tool.Core
             uint atlasCode = iconId / 100u;
             string code = atlasCode.ToString();
 
-            // Current DMO Cash Shop atlases use one group digit plus a three-digit page:
-            // 2102 => group 2, page 102; 5104 => group 5, page 104.
             if (code.Length < 4)
                 return false;
 
@@ -147,6 +211,25 @@ namespace DRW_Work_Tool.Core
 
             atlasName = $"cashshop{group}_{page}";
             return true;
+        }
+
+        private static bool TryParseAtlasBaseId(string atlasName, out uint baseId)
+        {
+            baseId = 0;
+            if (string.IsNullOrWhiteSpace(atlasName) ||
+                !atlasName.StartsWith("cashshop", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            string suffix = atlasName.Substring("cashshop".Length);
+            int underscore = suffix.IndexOf('_');
+            if (underscore <= 0 || underscore >= suffix.Length - 1)
+                return false;
+
+            string group = suffix.Substring(0, underscore);
+            string page = suffix.Substring(underscore + 1);
+            return uint.TryParse(group + page + "00", out baseId);
         }
 
         public static void Reset()
