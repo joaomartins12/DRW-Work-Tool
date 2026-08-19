@@ -461,13 +461,13 @@ namespace DRW_Work_Tool
             var status = new Label { Text = record.Active ? "ACTIVE" : "DISABLED", ForeColor = record.Active ? Color.FromArgb(100, 230, 130) : Color.FromArgb(240, 95, 95), Font = new Font("Segoe UI Semibold", 8.5F, FontStyle.Bold), Location = new Point(92, 30), Size = new Size(120, 20) };
             var name = new Label { Text = string.IsNullOrWhiteSpace(record.Name) ? $"Cash Shop {record.CashShopId}" : record.Name, ForeColor = CText, Font = new Font("Segoe UI Semibold", 9.5F, FontStyle.Bold), Location = new Point(12, 88), Size = new Size(202, 36), AutoEllipsis = true };
             string itemText = record.Items.Count == 0 ? "No ItemList item" : string.Join(", ", record.Items.Take(3).Select(x => $"{x.ItemId} x{x.Amount}"));
-            var item = new Label { Text = itemText, ForeColor = CMuted, Location = new Point(12, 126), Size = new Size(202, 20), AutoEllipsis = true };
+            var itemLabel = new Label { Text = itemText, ForeColor = CMuted, Location = new Point(12, 126), Size = new Size(202, 20), AutoEllipsis = true };
             var price = new Label { Text = $"C {record.Price:N0} • ID {record.CashShopId} • Product {record.UniqueId}", ForeColor = Color.FromArgb(245, 205, 80), Location = new Point(12, 148), Size = new Size(202, 20), AutoEllipsis = true };
             var edit = CreateEditorActionButton("EDIT"); edit.Location = new Point(12, 174); edit.Size = new Size(94, 28);
             var clone = CreateEditorActionButton("CLONE"); clone.Location = new Point(120, 174); clone.Size = new Size(94, 28);
             edit.Click += (_, _) => OpenCashShopEditTab(state.Service, record, new XElement(record.Node));
             clone.Click += (_, _) => { CashShopRecord cloned = state.Service.CloneRecord(record); OpenCashShopEditTab(state.Service, cloned, new XElement(cloned.Node)); RefreshCashShopBrowser(state); };
-            card.Controls.AddRange(new Control[] { icon, badge, status, name, item, price, edit, clone });
+            card.Controls.AddRange(new Control[] { icon, badge, status, name, itemLabel, price, edit, clone });
             return card;
         }
 
