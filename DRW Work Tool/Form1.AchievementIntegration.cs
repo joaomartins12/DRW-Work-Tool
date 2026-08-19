@@ -75,8 +75,18 @@ namespace DRW_Work_Tool
             if (!fileName.Equals("Achieve.xml", StringComparison.OrdinalIgnoreCase))
                 return;
 
-            if (selected.Tag is AchievementBrowseState)
+            // Dedicated Achievement tabs must never be redirected again.
+            // Most importantly, OpenAchievementBrowser first creates an
+            // EditorLoadingView before AchievementBrowseState is assigned.
+            // Without this guard the integration handler sees its own loading
+            // tab as a stale generic tab, disposes it and opens another one,
+            // creating the visible loading/flicker loop.
+            if (selected.Tag is AchievementBrowseState ||
+                selected.Tag is AchievementEditState ||
+                ContainsAchievementLoadingView(selected))
+            {
                 return;
+            }
 
             string path = selected.Name;
             if (!File.Exists(path))
@@ -84,10 +94,24 @@ namespace DRW_Work_Tool
 
             // OpenXmlEditor may have created a generic browser before this
             // integration handler runs. Replace that stale generic tab with the
-            // dedicated Achievement editor immediately.
+            // dedicated Achievement editor once only.
             editorTabs.TabPages.Remove(selected);
             selected.Dispose();
             OpenAchievementBrowser(path);
+        }
+
+        private static bool ContainsAchievementLoadingView(Control root)
+        {
+            if (root is EditorLoadingView)
+                return true;
+
+            foreach (Control child in root.Controls)
+            {
+                if (ContainsAchievementLoadingView(child))
+                    return true;
+            }
+
+            return false;
         }
 
         private void EnsureAchievementImportButton(TabPage page)
