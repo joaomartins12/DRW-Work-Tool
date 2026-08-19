@@ -60,7 +60,7 @@ namespace DRW_Work_Tool
             public XElement CreateNewNode()
             {
                 uint id = SuggestAvailableId(
-                    Records.Select(x => UInt(x, "s_nQuestID")).DefaultIfEmpty(1499).Max() + 1);
+                    Records.Select(x => UInt(x, "s_nQuestID")).DefaultIfEmpty(1499u).Max() + 1);
                 return new XElement("AchieveSINFO",
                     new XElement("s_nQuestID", id),
                     new XElement("s_nIcon", 0),
@@ -102,7 +102,7 @@ namespace DRW_Work_Tool
             {
                 XElement? target = Document.Root?.Elements("AchieveSINFO")
                     .FirstOrDefault(x => UInt(x, "s_nQuestID") == UInt(node, "s_nQuestID") &&
-                                         Text(x, "s_szName") == Text(node, "s_szName"));
+                                         AchievementText(x, "s_szName") == AchievementText(node, "s_szName"));
                 target?.Remove();
                 SaveDocumentWithBackup(Document, FilePath);
                 Document = LoadAchievement(FilePath);
@@ -115,7 +115,7 @@ namespace DRW_Work_Tool
                     .FirstOrDefault(x => UInt(x, "s_dwID") == buffId);
                 return buff == null
                     ? $"Buff {buffId} (missing in Buff.xml)"
-                    : $"{buffId} — {Text(buff, "s_szName")}";
+                    : $"{buffId} — {AchievementText(buff, "s_szName")}";
             }
 
             public IReadOnlyList<XElement> Buffs(string query)
@@ -146,8 +146,8 @@ namespace DRW_Work_Tool
                 bool IsTitleQuest(XElement x)
                 {
                     uint id = UInt(x, "UniqID");
-                    string tab = Text(x, "TitleTab");
-                    string title = Text(x, "TitleText");
+                    string tab = AchievementText(x, "TitleTab");
+                    string title = AchievementText(x, "TitleText");
                     int type = Int(x, "Type");
                     XElement? goal = x.Element("QuestGoals")?.Elements("QuestGoal").FirstOrDefault();
                     int goalType = goal == null ? -1 : Int(goal, "GoalType");
@@ -193,7 +193,7 @@ namespace DRW_Work_Tool
                 Set(quest, "Active", "1");
                 Set(quest, "Type", "5");
                 Set(quest, "TitleTab", string.Empty);
-                Set(quest, "TitleText", Text(achievement, "s_szTitle"));
+                Set(quest, "TitleText", AchievementText(achievement, "s_szTitle"));
                 Set(quest, "Body", string.Empty);
                 Set(quest, "Simple", string.Empty);
                 Set(quest, "Helper", string.Empty);
@@ -206,7 +206,7 @@ namespace DRW_Work_Tool
                 XElement goal = goals.Elements("QuestGoal").FirstOrDefault() ?? new XElement("QuestGoal");
                 if (goal.Parent == null) goals.Add(goal);
                 Set(goal, "GoalType", "2");
-                Set(goal, "GoalId", Text(achievement, "s_nType"));
+                Set(goal, "GoalId", AchievementText(achievement, "s_nType"));
                 if (goal.Element("goalAmount") == null) Set(goal, "goalAmount", "0");
                 Set(quest, "Goals", "1");
 
@@ -362,8 +362,8 @@ namespace DRW_Work_Tool
             uint questId = UInt(node, "s_nQuestID");
             uint iconId = UInt(node, "s_nIcon");
             uint buffId = UInt(node, "s_nBuffCode");
-            string name = Text(node, "s_szName");
-            string titleText = Text(node, "s_szTitle");
+            string name = AchievementText(node, "s_szName");
+            string titleText = AchievementText(node, "s_szTitle");
             XElement? quest = state.Service.Quest(questId);
 
             var card = new Panel { Height = 104, Width = Math.Max(560, state.Results.ClientSize.Width - 26),
@@ -373,11 +373,11 @@ namespace DRW_Work_Tool
                 SizeMode = PictureBoxSizeMode.Zoom, Image = ImageDatabasePreview.TryLoadInterfaceIcon(iconId, "Achieve") };
             var main = new Label { Text = string.IsNullOrWhiteSpace(titleText) ? name : titleText, ForeColor = CText,
                 Font = new Font("Segoe UI Semibold", 10F, FontStyle.Bold), Location = new Point(104,10), Size = new Size(430,24), AutoEllipsis = true };
-            var info = new Label { Text = $"Quest {questId} • Icon {iconId} • Type {Text(node,"s_nType")} • Group {Text(node,"s_nGroup")}/{Text(node,"s_nSubGroup")}",
+            var info = new Label { Text = $"Quest {questId} • Icon {iconId} • Type {AchievementText(node,"s_nType")} • Group {AchievementText(node,"s_nGroup")}/{AchievementText(node,"s_nSubGroup")}",
                 ForeColor = Color.FromArgb(120,220,145), Location = new Point(104,36), Size = new Size(480,20), AutoEllipsis = true };
-            var refs = new Label { Text = $"{state.Service.BuffSummary(buffId)} • Quest: {(quest == null ? "missing" : Text(quest,"TitleText"))}",
+            var refs = new Label { Text = $"{state.Service.BuffSummary(buffId)} • Quest: {(quest == null ? "missing" : AchievementText(quest,"TitleText"))}",
                 ForeColor = CMuted, Location = new Point(104,58), Size = new Size(500,20), AutoEllipsis = true };
-            var desc = new Label { Text = Text(node,"s_szComment"), ForeColor = CMuted, Location = new Point(104,79), Size = new Size(500,18), AutoEllipsis = true };
+            var desc = new Label { Text = AchievementText(node,"s_szComment"), ForeColor = CMuted, Location = new Point(104,79), Size = new Size(500,18), AutoEllipsis = true };
             var edit = CreateEditorActionButton("EDIT"); edit.Size = new Size(88,30); edit.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             var clone = CreateEditorActionButton("CLONE"); clone.Size = new Size(88,30); clone.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             void LayoutCard()
@@ -409,7 +409,7 @@ namespace DRW_Work_Tool
 
         private void OpenAchievementEditTab(AchievementService service, XElement working, XElement? original, bool isNew)
         {
-            var page = CreateDarkTab((Text(working,"s_szTitle") is string t && t.Length > 0 ? t : "Achievement") + " [Edit]");
+            var page = CreateDarkTab((AchievementText(working,"s_szTitle") is string t && t.Length > 0 ? t : "Achievement") + " [Edit]");
             var top = new Panel { Dock = DockStyle.Top, Height = 66, BackColor = CEditor, Padding = new Padding(16,12,16,10) };
             var save = CreateEditorActionButton("SAVE"); save.Size = new Size(100,34);
             var raw = CreateEditorActionButton("VIEW XML"); raw.Size = new Size(108,34); raw.Location = new Point(110,0);
@@ -453,7 +453,7 @@ namespace DRW_Work_Tool
                 try
                 {
                     Pull(); service.Save(state.Working, state.Original); state.Original = service.Records.FirstOrDefault(x => UInt(x,"s_nQuestID") == UInt(state.Working,"s_nQuestID"));
-                    state.IsNew = false; state.Dirty = false; page.Text = (Text(state.Working,"s_szTitle").Length > 0 ? Text(state.Working,"s_szTitle") : Text(state.Working,"s_szName")) + " [Edit]";
+                    state.IsNew = false; state.Dirty = false; page.Text = (AchievementText(state.Working,"s_szTitle").Length > 0 ? AchievementText(state.Working,"s_szTitle") : AchievementText(state.Working,"s_szName")) + " [Edit]";
                     RefreshAllAchievementBrowsers(service); MessageBox.Show("Achieve.xml saved successfully.", "Achievement Editor", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 catch (Exception ex) { ShowEditorError("Save Achievement", ex); }
@@ -462,13 +462,13 @@ namespace DRW_Work_Tool
             selectBuff.Click += (_, _) =>
             {
                 uint? selected = OpenAchievementReferencePicker("Select Buff", "Search Buff ID or name...",
-                    service.Buffs, x => $"{UInt(x,"s_dwID")} — {Text(x,"s_szName")} — {Text(x,"s_szComment")}", x => UInt(x,"s_dwID"));
+                    service.Buffs, x => $"{UInt(x,"s_dwID")} — {AchievementText(x,"s_szName")} — {AchievementText(x,"s_szComment")}", x => UInt(x,"s_dwID"));
                 if (selected.HasValue) fields["s_nBuffCode"].Text = selected.Value.ToString(CultureInfo.InvariantCulture);
             };
             selectQuest.Click += (_, _) =>
             {
                 uint? selected = OpenAchievementReferencePicker("Select related title quest", "Search related achievement/title quests...",
-                    service.RelatedTitleQuests, x => $"{UInt(x,"UniqID")} — {Text(x,"TitleText")} — Type {Text(x,"Type")}", x => UInt(x,"UniqID"));
+                    service.RelatedTitleQuests, x => $"{UInt(x,"UniqID")} — {AchievementText(x,"TitleText")} — Type {AchievementText(x,"Type")}", x => UInt(x,"UniqID"));
                 if (selected.HasValue) fields["s_nQuestID"].Text = selected.Value.ToString(CultureInfo.InvariantCulture);
             };
             createQuest.Click += (_, _) =>
@@ -499,7 +499,7 @@ namespace DRW_Work_Tool
                 Image? old = icon.Image; icon.Image = ImageDatabasePreview.TryLoadInterfaceIcon(iconId, "Achieve"); old?.Dispose();
                 uint buffId = uint.TryParse(fields["s_nBuffCode"].Text, out uint b) ? b : 0; buffStatus.Text = service.BuffSummary(buffId);
                 uint qid = uint.TryParse(fields["s_nQuestID"].Text, out uint q) ? q : 0; XElement? quest = service.Quest(qid);
-                questStatus.Text = quest == null ? $"Quest {qid}: not found" : $"Quest {qid}: {Text(quest,"TitleText")} • Type {Text(quest,"Type")}";
+                questStatus.Text = quest == null ? $"Quest {qid}: not found" : $"Quest {qid}: {AchievementText(quest,"TitleText")} • Type {AchievementText(quest,"Type")}";
                 questStatus.ForeColor = quest == null ? Color.FromArgb(255,180,90) : Color.FromArgb(120,220,145);
             }
         }
@@ -534,6 +534,6 @@ namespace DRW_Work_Tool
             uint.TryParse(node.Element(name)?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out uint v) ? v : 0;
         private static int Int(XElement node, string name) =>
             int.TryParse(node.Element(name)?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int v) ? v : 0;
-        private static string Text(XElement node, string name) => node.Element(name)?.Value ?? string.Empty;
+        private static string AchievementText(XElement node, string name) => node.Element(name)?.Value ?? string.Empty;
     }
 }
