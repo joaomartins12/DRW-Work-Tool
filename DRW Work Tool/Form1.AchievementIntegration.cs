@@ -1,6 +1,7 @@
 using DRW_Work_Tool.Core;
 using System;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -13,7 +14,6 @@ namespace DRW_Work_Tool
     {
         private bool _achievementIntegrationReady;
         private bool _achievementRefreshPending;
-        private System.Windows.Forms.Timer? _achievementStateTimer;
 
         protected override void OnLoad(EventArgs e)
         {
@@ -24,38 +24,16 @@ namespace DRW_Work_Tool
 
             _achievementIntegrationReady = true;
 
-            _achievementStateTimer = new System.Windows.Forms.Timer
-            {
-                Interval = 120
-            };
-
-            _achievementStateTimer.Tick += (_, _) =>
-                RefreshAchievementIntegration();
-
             if (editorTabs != null)
             {
                 editorTabs.SelectedIndexChanged += (_, _) =>
-                {
                     QueueAchievementIntegrationRefresh();
-                    StartAchievementStateTimer();
-                };
 
                 editorTabs.ControlAdded += (_, _) =>
-                {
                     QueueAchievementIntegrationRefresh();
-                    StartAchievementStateTimer();
-                };
             }
 
             QueueAchievementIntegrationRefresh();
-        }
-
-        private void StartAchievementStateTimer()
-        {
-            if (_achievementStateTimer == null || _achievementStateTimer.Enabled)
-                return;
-
-            _achievementStateTimer.Start();
         }
 
         private void QueueAchievementIntegrationRefresh()
@@ -77,8 +55,6 @@ namespace DRW_Work_Tool
             if (editorTabs == null || editorTabs.IsDisposed)
                 return;
 
-            bool waitingForAchievementBrowser = false;
-
             foreach (TabPage page in editorTabs.TabPages)
             {
                 if (page.IsDisposed)
@@ -92,19 +68,13 @@ namespace DRW_Work_Tool
                     continue;
                 }
 
-                if (page.Tag is AchievementBrowseState browseState)
+                if (page.Tag is AchievementBrowseState state &&
+                    state.Results.Tag is string marker &&
+                    marker == "PreparedAchievementBrowser")
                 {
-                    EnsureAchievementIconBinding(browseState);
-                    ApplyVisibleAchievementIconPreviews(browseState);
-                    continue;
+                    ApplyPreparedAchievementIcons(state);
                 }
-
-                if (ContainsAchievementLoadingView(page))
-                    waitingForAchievementBrowser = true;
             }
-
-            if (!waitingForAchievementBrowser)
-                _achievementStateTimer?.Stop();
         }
 
         private void EnsureAchievementDirectOpenButton(TabPage page)
@@ -132,7 +102,7 @@ namespace DRW_Work_Tool
             editorToolTip.SetToolTip(
                 open,
                 "Open Achieve.xml in the visual Achievement / Title Editor. " +
-                "The loading screen remains visible until Achieve.xml, Quest.xml, Buff.xml and the title icon atlases are ready.");
+                "The loading screen remains until every initial card and title icon is ready.");
 
             open.Click += async (_, _) =>
             {
@@ -160,11 +130,9 @@ namespace DRW_Work_Tool
                 if (existing != null)
                 {
                     editorTabs.SelectedTab = existing;
-                    StartAchievementStateTimer();
                     return;
                 }
 
-                StartAchievementStateTimer();
                 await OpenPreparedAchievementBrowserAsync(path);
             };
 
@@ -183,15 +151,14 @@ namespace DRW_Work_Tool
 
             var loading = new EditorLoadingView(
                 "Loading Achievement / Title Editor",
-                "Loading Achieve.xml, Quest.xml, Buff.xml and title icons from achieve_icon.dds, achieve_icon_02.dds and achieve_icon_03.dds...");
+                "Reading Achieve.xml, Quest.xml and Buff.xml, then decoding achieve_icon.dds, achieve_icon_02.dds and achieve_icon_03.dds.");
 
             page.Controls.Add(loading);
             editorTabs.TabPages.Add(page);
             editorTabs.SelectedTab = page;
 
-            // Give WinForms enough time to perform an actual paint before the
-            // heavier XML/ImageDatabase work starts.
-            await Task.Delay(40);
+            // Allow the loading view to be painted before any expensive work.
+            await Task.Delay(80);
 
             try
             {
@@ -199,16 +166,9 @@ namespace DRW_Work_Tool
                 {
                     var loaded = new AchievementService(full);
 
-                    // Warm the title icon mappings while the loading view is still
-                    // visible. Category Achieve resolves the three achieve_icon atlases.
-                    foreach (uint iconId in loaded.Records
-                        .Select(x => UInt(x, "s_nIcon"))
-                        .Where(x => x > 0)
-                        .Distinct())
-                    {
-                        using Bitmap? preview =
-                            ImageDatabasePreview.TryLoadInterfaceIcon(iconId, "Achieve");
-                    }
+                    // This is intentionally NOT ImageDatabasePreview. Achievement
+                    // titles require the real DDS atlas files and the DDS decoder.
+                    AchievementIconAtlasCache.Preload();
 
                     return loaded;
                 });
@@ -216,16 +176,10 @@ namespace DRW_Work_Tool
                 if (page.IsDisposed)
                     return;
 
-                BuildAchievementBrowser(page, service);
-
-                // Let card layout complete before applying visible previews.
-                await Task.Yield();
-
-                if (!page.IsDisposed && page.Tag is AchievementBrowseState state)
-                {
-                    EnsureAchievementIconBinding(state);
-                    ApplyVisibleAchievementIconPreviews(state);
-                }
+                await BuildPreparedAchievementBrowserAsync(
+                    page,
+                    service,
+                    loading);
             }
             catch (Exception ex)
             {
@@ -234,61 +188,368 @@ namespace DRW_Work_Tool
 
                 page.Controls.Clear();
                 page.Controls.Add(CreateInfoLabel(
-                    "Achieve.xml could not be loaded.\r\n\r\n" + ex.Message));
+                    "Achievement editor could not be prepared.\r\n\r\n" +
+                    ex.Message +
+                    "\r\n\r\nExpected DDS atlases: achieve_icon.dds, achieve_icon_02.dds, achieve_icon_03.dds."));
 
                 AppLogger.ErrorDetailed(
                     "Achievement Editor",
                     ex.Message,
-                    "Verify Achieve.xml, Quest.xml, Buff.xml and achieve_icon atlas mappings in ImgDatabase.");
+                    "Verify ImgDatabase/ImageDatabase.json and the three achieve_icon DDS atlas files.");
             }
         }
 
-        private void EnsureAchievementIconBinding(AchievementBrowseState state)
+        private async Task BuildPreparedAchievementBrowserAsync(
+            TabPage page,
+            AchievementService service,
+            EditorLoadingView loading)
         {
-            const string marker = "AchievementIconBinding";
+            var root = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = CEditor,
+                Padding = new Padding(18),
+                Visible = false
+            };
 
-            if (state.Results.Tag is string tag && tag == marker)
+            var header = new Panel
+            {
+                Dock = DockStyle.Top,
+                Height = 112,
+                BackColor = CEditor
+            };
+
+            var title = new Label
+            {
+                Text = "Achievement / Title Editor",
+                ForeColor = CText,
+                Font = new Font("Segoe UI Semibold", 14F, FontStyle.Bold),
+                Location = new Point(8, 4),
+                AutoSize = true
+            };
+
+            var sub = new Label
+            {
+                Text = $"{service.Records.Count:N0} titles • achieve_icon DDS atlases • Buff.xml • title quests only",
+                ForeColor = CMuted,
+                Location = new Point(10, 35),
+                AutoSize = true
+            };
+
+            var search = new TextBox
+            {
+                Location = new Point(8, 68),
+                Height = 28,
+                BackColor = Color.FromArgb(10, 10, 10),
+                ForeColor = CText,
+                BorderStyle = BorderStyle.FixedSingle,
+                PlaceholderText = "Search QuestID, title, name, type, group, BuffID...",
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            };
+
+            var create = CreateEditorActionButton("NEW TITLE");
+            create.Size = new Size(130, 34);
+            create.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+
+            var count = new Label
+            {
+                ForeColor = CMuted,
+                AutoSize = true,
+                Location = new Point(10, 96)
+            };
+
+            var results = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoScroll = true,
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                BackColor = CEditor,
+                Padding = new Padding(4, 8, 16, 8),
+                Tag = "PreparedAchievementBrowser"
+            };
+
+            DarkUi.ApplyDarkScrollBar(results);
+
+            header.Controls.AddRange(new Control[]
+            {
+                title,
+                sub,
+                search,
+                create,
+                count
+            });
+
+            root.Controls.Add(results);
+            root.Controls.Add(header);
+            page.Controls.Add(root);
+            loading.BringToFront();
+
+            var state = new AchievementBrowseState
+            {
+                Service = service,
+                Results = results,
+                Search = search,
+                Count = count
+            };
+
+            page.Tag = state;
+
+            void Layout()
+            {
+                create.Location = new Point(
+                    Math.Max(150, header.ClientSize.Width - create.Width - 8),
+                    6);
+
+                search.Width = Math.Max(220, header.ClientSize.Width - 16);
+            }
+
+            header.Resize += (_, _) => Layout();
+            results.Resize += (_, _) => ResizeAchievementCards(results);
+
+            search.TextChanged += async (_, _) =>
+                await RefreshPreparedAchievementBrowserAsync(state);
+
+            create.Click += (_, _) =>
+                OpenAchievementEditTab(
+                    service,
+                    service.CreateNewNode(),
+                    null,
+                    true);
+
+            Layout();
+
+            // The loading overlay remains visible while ALL initial cards are
+            // created in batches. Task.Yield lets its animation repaint between
+            // batches rather than freezing the UI while hundreds of controls are
+            // allocated.
+            await RefreshPreparedAchievementBrowserAsync(
+                state,
+                keepLoadingResponsive: true,
+                loading);
+
+            if (page.IsDisposed)
                 return;
 
-            state.Results.Tag = marker;
+            root.Visible = true;
+            root.BringToFront();
 
-            state.Results.Scroll += (_, _) =>
-                BeginInvoke(new Action(() =>
-                    ApplyVisibleAchievementIconPreviews(state)));
+            page.Controls.Remove(loading);
+            loading.Dispose();
 
-            state.Results.MouseWheel += (_, _) =>
-                BeginInvoke(new Action(() =>
-                    ApplyVisibleAchievementIconPreviews(state)));
-
-            state.Search.TextChanged += (_, _) =>
-                BeginInvoke(new Action(() =>
-                    ApplyVisibleAchievementIconPreviews(state)));
+            root.PerformLayout();
+            results.PerformLayout();
+            ApplyPreparedAchievementIcons(state);
         }
 
-        private void ApplyVisibleAchievementIconPreviews(AchievementBrowseState state)
+        private async Task RefreshPreparedAchievementBrowserAsync(
+            AchievementBrowseState state,
+            bool keepLoadingResponsive = false,
+            EditorLoadingView? loading = null)
         {
             if (state.Results.IsDisposed)
                 return;
 
-            Rectangle viewport = state.Results.ClientRectangle;
-            viewport.Inflate(0, 120);
+            string query = state.Search.Text.Trim();
 
-            int index = 0;
+            state.Filtered = state.Service.Records
+                .Where(x =>
+                    query.Length == 0 ||
+                    x.ToString(SaveOptions.DisableFormatting)
+                        .Contains(query, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            DisposeAchievementCardImages(state.Results);
+            state.Results.SuspendLayout();
+            state.Results.Controls.Clear();
+            state.Results.ResumeLayout(false);
+
+            const int batchSize = 32;
+
+            for (int index = 0; index < state.Filtered.Count; index++)
+            {
+                XElement node = state.Filtered[index];
+                state.Results.Controls.Add(
+                    CreatePreparedAchievementCard(state, node));
+
+                if (keepLoadingResponsive &&
+                    (index + 1) % batchSize == 0)
+                {
+                    loading?.BringToFront();
+                    await Task.Yield();
+                }
+            }
+
+            state.Count.Text =
+                $"Results: {state.Filtered.Count:N0} / {state.Service.Records.Count:N0}";
+
+            ResizeAchievementCards(state.Results);
+            state.Results.PerformLayout();
+        }
+
+        private Control CreatePreparedAchievementCard(
+            AchievementBrowseState state,
+            XElement node)
+        {
+            uint questId = UInt(node, "s_nQuestID");
+            uint iconId = UInt(node, "s_nIcon");
+            uint buffId = UInt(node, "s_nBuffCode");
+
+            string name = AchievementText(node, "s_szName");
+            string titleText = AchievementText(node, "s_szTitle");
+            XElement? quest = state.Service.Quest(questId);
+
+            var card = new Panel
+            {
+                Height = 104,
+                Width = Math.Max(560, state.Results.ClientSize.Width - 26),
+                BackColor = Color.FromArgb(29, 29, 29),
+                Margin = new Padding(0, 0, 0, 8),
+                Tag = node
+            };
+
+            card.Paint += (_, e) =>
+            {
+                using var pen = new Pen(Color.FromArgb(70, 70, 70));
+                e.Graphics.DrawRectangle(
+                    pen,
+                    0,
+                    0,
+                    card.Width - 1,
+                    card.Height - 1);
+            };
+
+            var icon = new PictureBox
+            {
+                Location = new Point(12, 12),
+                Size = new Size(78, 78),
+                BackColor = Color.Black,
+                SizeMode = PictureBoxSizeMode.Zoom,
+                Image = AchievementIconAtlasCache.TryLoad(iconId),
+                Tag = iconId
+            };
+
+            var main = new Label
+            {
+                Text = string.IsNullOrWhiteSpace(titleText) ? name : titleText,
+                ForeColor = CText,
+                Font = new Font("Segoe UI Semibold", 10F, FontStyle.Bold),
+                Location = new Point(104, 10),
+                Size = new Size(430, 24),
+                AutoEllipsis = true
+            };
+
+            var info = new Label
+            {
+                Text =
+                    $"Quest {questId} • Icon {iconId} • Type {AchievementText(node, "s_nType")} • " +
+                    $"Group {AchievementText(node, "s_nGroup")}/{AchievementText(node, "s_nSubGroup")}",
+                ForeColor = Color.FromArgb(120, 220, 145),
+                Location = new Point(104, 36),
+                Size = new Size(480, 20),
+                AutoEllipsis = true
+            };
+
+            var refs = new Label
+            {
+                Text =
+                    $"{state.Service.BuffSummary(buffId)} • Quest: " +
+                    (quest == null ? "missing" : AchievementText(quest, "TitleText")),
+                ForeColor = CMuted,
+                Location = new Point(104, 58),
+                Size = new Size(500, 20),
+                AutoEllipsis = true
+            };
+
+            var desc = new Label
+            {
+                Text = AchievementText(node, "s_szComment"),
+                ForeColor = CMuted,
+                Location = new Point(104, 79),
+                Size = new Size(500, 18),
+                AutoEllipsis = true
+            };
+
+            var edit = CreateEditorActionButton("EDIT");
+            edit.Size = new Size(88, 30);
+            edit.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+
+            var clone = CreateEditorActionButton("CLONE");
+            clone.Size = new Size(88, 30);
+            clone.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+
+            void LayoutCard()
+            {
+                clone.Location = new Point(
+                    card.ClientSize.Width - clone.Width - 12,
+                    54);
+
+                edit.Location = new Point(
+                    card.ClientSize.Width - edit.Width - 12,
+                    16);
+
+                int width = Math.Max(
+                    140,
+                    edit.Left - main.Left - 12);
+
+                main.Width = width;
+                info.Width = width;
+                refs.Width = width;
+                desc.Width = width;
+            }
+
+            card.Resize += (_, _) => LayoutCard();
+
+            edit.Click += (_, _) =>
+                OpenAchievementEditTab(
+                    state.Service,
+                    new XElement(node),
+                    node,
+                    false);
+
+            clone.Click += (_, _) =>
+            {
+                XElement copy = new XElement(node);
+                uint next = state.Service.SuggestAvailableId(questId + 1);
+
+                XElement? id = copy.Element("s_nQuestID");
+                if (id != null)
+                    id.Value = next.ToString(CultureInfo.InvariantCulture);
+
+                XElement? cloneName = copy.Element("s_szName");
+                if (cloneName != null)
+                    cloneName.Value += " [Clone]";
+
+                OpenAchievementEditTab(
+                    state.Service,
+                    copy,
+                    null,
+                    true);
+            };
+
+            card.Controls.AddRange(new Control[]
+            {
+                icon,
+                main,
+                info,
+                refs,
+                desc,
+                edit,
+                clone
+            });
+
+            LayoutCard();
+            return card;
+        }
+
+        private void ApplyPreparedAchievementIcons(AchievementBrowseState state)
+        {
+            if (state.Results.IsDisposed)
+                return;
 
             foreach (Control card in state.Results.Controls)
             {
-                if (index >= state.Filtered.Count)
-                    break;
-
-                XElement node = state.Filtered[index++];
-
-                Rectangle bounds = new Rectangle(
-                    card.Left + state.Results.AutoScrollPosition.X,
-                    card.Top + state.Results.AutoScrollPosition.Y,
-                    card.Width,
-                    card.Height);
-
-                if (!viewport.IntersectsWith(bounds))
+                if (card.Tag is not XElement node)
                     continue;
 
                 PictureBox? picture = card.Controls
@@ -300,25 +561,31 @@ namespace DRW_Work_Tool
 
                 uint iconId = UInt(node, "s_nIcon");
 
-                if (picture.Tag is uint loaded &&
-                    loaded == iconId &&
-                    picture.Image != null)
+                if (picture.Image != null &&
+                    picture.Tag is uint loaded &&
+                    loaded == iconId)
                 {
                     continue;
                 }
 
-                Image? previous = picture.Image;
-
-                // Achievement/title icons are stored in achieve_icon.dds,
-                // achieve_icon_02.dds and achieve_icon_03.dds.
-                picture.Image = ImageDatabasePreview.TryLoadInterfaceIcon(
-                    iconId,
-                    "Achieve");
-
+                Image? old = picture.Image;
+                picture.Image = AchievementIconAtlasCache.TryLoad(iconId);
                 picture.Tag = iconId;
 
-                if (!ReferenceEquals(previous, picture.Image))
-                    previous?.Dispose();
+                if (!ReferenceEquals(old, picture.Image))
+                    old?.Dispose();
+            }
+        }
+
+        private static void DisposeAchievementCardImages(Control root)
+        {
+            foreach (Control card in root.Controls)
+            {
+                foreach (PictureBox picture in card.Controls.OfType<PictureBox>())
+                {
+                    picture.Image?.Dispose();
+                    picture.Image = null;
+                }
             }
         }
 
