@@ -387,10 +387,6 @@ namespace DRW_Work_Tool.Core
                         "ERRO durante ROLLBACK: " +
                         rollbackEx.Message);
 
-                    // A fatal TDS/network error can leave the client-side
-                    // connection unusable. Remove it from the pool and force
-                    // a physical disconnect so SQL Server can clean up any
-                    // still-open transaction for that session.
                     try
                     {
                         SqlConnection.ClearPool(
@@ -753,8 +749,6 @@ namespace DRW_Work_Tool.Core
                                 stats,
                                 "MoveSpeed",
                                 $"Digimon {type} Stats"),
-                        // The current DB data supplied by the user maps WSValue
-                        // to Digimon_List WalkLen (e.g. 300 -> 300).
                         WSValue =
                             ReadIntLikeDecimal(
                                 node,
@@ -1022,15 +1016,13 @@ namespace DRW_Work_Tool.Core
                                         link,
                                         "nSlot",
                                         $"DigimonEvo {type} EvolutionType"),
-                                EvolutionLineId =
-                                    evolutionLineId
+                                EvolutionLineId = evolutionLineId
                             });
                     }
                 }
             }
 
-            if (evolutionStages.Count !=
-                evolutionLines.Count * 9)
+            if (evolutionStages.Count != evolutionLines.Count * 9)
             {
                 throw new InvalidDataException(
                     "DigimonEvo validation interna: EvolutionStage != EvolutionLine * 9.");
@@ -1085,16 +1077,8 @@ namespace DRW_Work_Tool.Core
                     "Skill.xml não contém SkillData.");
             }
 
-            // The user's database screenshot has 6,521 SkillCode rows while
-            // the supplied Skill.xml has 6,523 physical blocks but only 6,521
-            // unique s_dwID values. Reproduce that behavior deterministically:
-            // FIRST physical SkillData wins for duplicate IDs.
-            var unique =
-                new List<XElement>();
-
-            var seen =
-                new HashSet<uint>();
-
+            var unique = new List<XElement>();
+            var seen = new HashSet<uint>();
             duplicateSkillIdsCollapsed = 0;
 
             foreach (XElement node in physical)
@@ -1123,20 +1107,10 @@ namespace DRW_Work_Tool.Core
                 unique.Add(node);
             }
 
-            skillCodes =
-                new List<SkillCodeRow>(
-                    unique.Count);
-
-            skillInfos =
-                new List<SkillInfoRow>(
-                    unique.Count);
-
-            skillApplies =
-                new List<SkillApplyRow>(
-                    unique.Count * 3);
-
-            digimonSkills =
-                new List<DigimonSkillRow>();
+            skillCodes = new List<SkillCodeRow>(unique.Count);
+            skillInfos = new List<SkillInfoRow>(unique.Count);
+            skillApplies = new List<SkillApplyRow>(unique.Count * 3);
+            digimonSkills = new List<DigimonSkillRow>();
 
             int skillCodeAssetId = 0;
             int applyId = 0;
@@ -1146,19 +1120,12 @@ namespace DRW_Work_Tool.Core
 
             var uniqueIds =
                 unique
-                    .Select(
-                        x =>
-                            ReadUInt(
-                                x,
-                                "s_dwID",
-                                "SkillData"))
+                    .Select(x => ReadUInt(x, "s_dwID", "SkillData"))
                     .ToHashSet();
 
             missingSkillReferences =
                 skillAssociations.Keys
-                    .Where(
-                        x =>
-                            !uniqueIds.Contains(x))
+                    .Where(x => !uniqueIds.Contains(x))
                     .OrderBy(x => x)
                     .ToList();
 
@@ -1166,16 +1133,8 @@ namespace DRW_Work_Tool.Core
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                uint skillId =
-                    ReadUInt(
-                        node,
-                        "s_dwID",
-                        "SkillData");
-
-                int sqlSkillId =
-                    CheckedInt(
-                        skillId,
-                        $"Skill {skillId}");
+                uint skillId = ReadUInt(node, "s_dwID", "SkillData");
+                int sqlSkillId = CheckedInt(skillId, $"Skill {skillId}");
 
                 skillCodeAssetId++;
 
@@ -1184,10 +1143,7 @@ namespace DRW_Work_Tool.Core
                     {
                         Id = skillCodeAssetId,
                         SkillCode = sqlSkillId,
-                        Comment =
-                            ReadOptionalText(
-                                node,
-                                "s_szComment")
+                        Comment = ReadOptionalText(node, "s_szComment")
                     });
 
                 List<XElement> applies =
@@ -1212,167 +1168,59 @@ namespace DRW_Work_Tool.Core
                         new SkillApplyRow
                         {
                             Id = applyId,
-                            Type =
-                                ReadInt(
-                                    apply,
-                                    "s_nA",
-                                    $"Skill {skillId} Apply {i + 1}"),
-                            // Existing DB sample shows s_nID mapped to Attribute.
-                            Attribute =
-                                ReadInt(
-                                    apply,
-                                    "s_nID",
-                                    $"Skill {skillId} Apply {i + 1}"),
-                            Value =
-                                ReadInt(
-                                    apply,
-                                    "s_nB",
-                                    $"Skill {skillId} Apply {i + 1}"),
-                            AdditionalValue =
-                                ReadInt(
-                                    apply,
-                                    "s_nC",
-                                    $"Skill {skillId} Apply {i + 1}"),
-                            SkillCodeAssetId =
-                                skillCodeAssetId,
-                            IncreaseValue =
-                                ReadInt(
-                                    apply,
-                                    "s_nIncrease_B_Point",
-                                    $"Skill {skillId} Apply {i + 1}"),
-                            // DB sample stores 1693216 -> 16932,
-                            // -63898 -> -638 and 10000 -> 100.
-                            Chance =
-                                ReadInt(
-                                    apply,
-                                    "s_nInvoke_Rate",
-                                    $"Skill {skillId} Apply {i + 1}") / 100
+                            Type = ReadInt(apply, "s_nA", $"Skill {skillId} Apply {i + 1}"),
+                            Attribute = ReadInt(apply, "s_nID", $"Skill {skillId} Apply {i + 1}"),
+                            Value = ReadInt(apply, "s_nB", $"Skill {skillId} Apply {i + 1}"),
+                            AdditionalValue = ReadInt(apply, "s_nC", $"Skill {skillId} Apply {i + 1}"),
+                            SkillCodeAssetId = skillCodeAssetId,
+                            IncreaseValue = ReadInt(apply, "s_nIncrease_B_Point", $"Skill {skillId} Apply {i + 1}"),
+                            Chance = ReadInt(apply, "s_nInvoke_Rate", $"Skill {skillId} Apply {i + 1}") / 100
                         });
                 }
 
                 skillInfoId++;
 
+                // IMPORTANT: Asset.SkillInfo.Value is NOT Apply1.s_nB.
+                // It follows s_fAttRange_NorDmg. The existing DB sample proves
+                // this directly: 7700511 has Value=0 while Apply1.s_nB=18103.
                 int value =
-                    ReadInt(
-                        applies[0],
-                        "s_nB",
-                        $"Skill {skillId} Apply 1");
+                    ReadIntLikeDecimal(
+                        node,
+                        "s_fAttRange_NorDmg",
+                        $"Skill {skillId}");
 
                 skillInfos.Add(
                     new SkillInfoRow
                     {
                         Id = skillInfoId,
                         SkillId = sqlSkillId,
-                        Name =
-                            ReadOptionalText(
-                                node,
-                                "s_szName"),
-                        DSUsage =
-                            ReadInt(
-                                node,
-                                "s_nUseDS",
-                                $"Skill {skillId}"),
-                        HPUsage =
-                            ReadInt(
-                                node,
-                                "s_nUseHP",
-                                $"Skill {skillId}"),
-                        // SkillInfo.Value is the principal/first apply B value.
+                        Name = ReadOptionalText(node, "s_szName"),
+                        DSUsage = ReadInt(node, "s_nUseDS", $"Skill {skillId}"),
+                        HPUsage = ReadInt(node, "s_nUseHP", $"Skill {skillId}"),
                         Value = value,
-                        CastingTime =
-                            ReadSkillCastingTime(
-                                node,
-                                skillId,
-                                log),
-                        Cooldown =
-                            ReadIntLikeDecimal(
-                                node,
-                                "s_fCooldownTime",
-                                $"Skill {skillId}"),
-                        MaxLevel =
-                            ReadInt(
-                                node,
-                                "s_nMaxLevel",
-                                $"Skill {skillId}"),
-                        RequiredPoints =
-                            ReadInt(
-                                node,
-                                "s_nLevelupPoint",
-                                $"Skill {skillId}"),
-                        Target =
-                            ReadInt(
-                                node,
-                                "s_nTarget",
-                                $"Skill {skillId}"),
-                        AreaOfEffect =
-                            ReadInt(
-                                node,
-                                "s_nAttSphere",
-                                $"Skill {skillId}"),
-                        AoEMinDamage =
-                            ReadIntLikeDecimal(
-                                node,
-                                "s_fAttRange_MinDmg",
-                                $"Skill {skillId}"),
-                        AoEMaxDamage =
-                            ReadIntLikeDecimal(
-                                node,
-                                "s_fAttRange_MaxDmg",
-                                $"Skill {skillId}"),
-                        Range =
-                            ReadIntLikeDecimal(
-                                node,
-                                "s_fAttRange",
-                                $"Skill {skillId}"),
-                        UnlockLevel =
-                            ReadInt(
-                                node,
-                                "s_nLimitLevel",
-                                $"Skill {skillId}"),
-                        // Asset.SkillInfo.MemoryChips is SQL tinyint.
-                        // In the supplied Skill.xml, s_nMemorySkill contains
-                        // values such as 1700/2200 and is NOT the DB
-                        // MemoryChips field. s_nReq_Item is the compatible
-                        // 0..255 source used by the server schema.
-                        MemoryChips =
-                            ReadTinyInt(
-                                node,
-                                "s_nReq_Item",
-                                $"Skill {skillId}"),
-                        FirstConditionCode =
-                            ReadInt(
-                                applies[0],
-                                "s_nBuffCode",
-                                $"Skill {skillId} Apply 1"),
-                        SecondConditionCode =
-                            ReadInt(
-                                applies[1],
-                                "s_nBuffCode",
-                                $"Skill {skillId} Apply 2"),
-                        ThirdConditionCode =
-                            ReadInt(
-                                applies[2],
-                                "s_nBuffCode",
-                                $"Skill {skillId} Apply 3"),
-                        Type =
-                            ReadInt(
-                                node,
-                                "s_nAttType",
-                                $"Skill {skillId}"),
-                        Description =
-                            ReadOptionalText(
-                                node,
-                                "s_szComment"),
-                        FamilyType =
-                            ReadInt(
-                                node,
-                                "s_nFamilyType",
-                                $"Skill {skillId}"),
-                        SkillType =
-                            ReadInt(
-                                node,
-                                "s_nSkillType",
-                                $"Skill {skillId}")
+                        CastingTime = ReadSkillCastingTime(node, skillId, log),
+                        Cooldown = ReadIntLikeDecimal(node, "s_fCooldownTime", $"Skill {skillId}"),
+                        MaxLevel = ReadInt(node, "s_nMaxLevel", $"Skill {skillId}"),
+                        RequiredPoints = ReadInt(node, "s_nLevelupPoint", $"Skill {skillId}"),
+                        Target = ReadInt(node, "s_nTarget", $"Skill {skillId}"),
+                        AreaOfEffect = ReadInt(node, "s_nAttSphere", $"Skill {skillId}"),
+                        AoEMinDamage = ReadIntLikeDecimal(node, "s_fAttRange_MinDmg", $"Skill {skillId}"),
+                        AoEMaxDamage = ReadIntLikeDecimal(node, "s_fAttRange_MaxDmg", $"Skill {skillId}"),
+                        Range = ReadIntLikeDecimal(node, "s_fAttRange", $"Skill {skillId}"),
+                        UnlockLevel = ReadInt(node, "s_nLimitLevel", $"Skill {skillId}"),
+                        MemoryChips = ReadTinyInt(node, "s_nReq_Item", $"Skill {skillId}"),
+
+                        // IMPORTANT: these are the three IncreaseApply.s_nB
+                        // parameters, in physical order. They are not s_nBuffCode.
+                        // Example 7700511 => 18103 / 10 / 0, matching SQL exactly.
+                        FirstConditionCode = ReadInt(applies[0], "s_nB", $"Skill {skillId} Apply 1"),
+                        SecondConditionCode = ReadInt(applies[1], "s_nB", $"Skill {skillId} Apply 2"),
+                        ThirdConditionCode = ReadInt(applies[2], "s_nB", $"Skill {skillId} Apply 3"),
+
+                        Type = ReadInt(node, "s_nAttType", $"Skill {skillId}"),
+                        Description = ReadOptionalText(node, "s_szComment"),
+                        FamilyType = ReadInt(node, "s_nFamilyType", $"Skill {skillId}"),
+                        SkillType = ReadInt(node, "s_nSkillType", $"Skill {skillId}")
                     });
 
                 if (skillAssociations.TryGetValue(
@@ -1382,8 +1230,7 @@ namespace DRW_Work_Tool.Core
                 {
                     List<SkillAssociation> ordered =
                         associations
-                            .Distinct(
-                                SkillAssociationComparer.Instance)
+                            .Distinct(SkillAssociationComparer.Instance)
                             .OrderBy(x => x.DigimonType)
                             .ThenBy(x => x.Slot)
                             .ToList();
@@ -1391,8 +1238,7 @@ namespace DRW_Work_Tool.Core
                     if (ordered.Count > 1)
                         sharedSkillAssociations += ordered.Count - 1;
 
-                    foreach (SkillAssociation association
-                             in ordered)
+                    foreach (SkillAssociation association in ordered)
                     {
                         digimonSkillId++;
 
@@ -1400,23 +1246,19 @@ namespace DRW_Work_Tool.Core
                             new DigimonSkillRow
                             {
                                 Id = digimonSkillId,
-                                Type =
-                                    CheckedInt(
-                                        association.DigimonType,
-                                        $"DigimonSkill Skill {skillId}"),
-                                Slot =
-                                    association.Slot,
-                                SkillId =
-                                    sqlSkillId
+                                Type = CheckedInt(
+                                    association.DigimonType,
+                                    $"DigimonSkill Skill {skillId}"),
+                                Slot = association.Slot,
+                                // Asset.DigimonSkill.SkillId stores the XML skill code,
+                                // not the Asset.SkillInfo identity value.
+                                SkillId = sqlSkillId
                             });
                     }
                 }
                 else
                 {
-                    // Required behavior: every Skill.xml skill that has no
-                    // Digimon_List association receives Type=0 / Slot=0.
                     digimonSkillId++;
-
                     digimonSkills.Add(
                         new DigimonSkillRow
                         {
@@ -1428,8 +1270,7 @@ namespace DRW_Work_Tool.Core
                 }
             }
 
-            if (skillApplies.Count !=
-                skillCodes.Count * 3)
+            if (skillApplies.Count != skillCodes.Count * 3)
             {
                 throw new InvalidDataException(
                     "Skill validation interna: SkillCodeApply != SkillCode * 3.");
@@ -1445,9 +1286,14 @@ namespace DRW_Work_Tool.Core
                 "unassociated Skill.xml IDs use Type=0, Slot=0.");
 
             log(
-                "SkillCodeApply mapping validado contra o sample fornecido: " +
-                "Type=s_nA, Attribute=s_nID, Value=s_nB, AdditionalValue=s_nC, " +
-                "IncreaseValue=s_nIncrease_B_Point, Chance=s_nInvoke_Rate/100.");
+                "SkillCodeApply mapping validado: Type=s_nA, Attribute=s_nID, " +
+                "Value=s_nB, AdditionalValue=s_nC, IncreaseValue=s_nIncrease_B_Point, " +
+                "Chance=s_nInvoke_Rate/100.");
+
+            log(
+                "SkillInfo effect mapping validado: Value=s_fAttRange_NorDmg; " +
+                "First/Second/ThirdConditionCode=s_nB de IncreaseApply 1/2/3. " +
+                "Isto preserva os parâmetros usados por damage, buffs, velocidade e outros efeitos condicionais.");
 
             log(
                 "SkillInfo mapping: MemoryChips=s_nReq_Item (SQL tinyint). " +
@@ -1515,24 +1361,18 @@ namespace DRW_Work_Tool.Core
                     SqlBulkCopyOptions.KeepNulls,
                     transaction)
                 {
-                    DestinationTableName =
-                        destination,
+                    DestinationTableName = destination,
                     BatchSize = 2000,
                     BulkCopyTimeout = 240,
                     EnableStreaming = true
                 };
 
-            foreach (DataColumn column
-                     in table.Columns)
+            foreach (DataColumn column in table.Columns)
             {
-                bulk.ColumnMappings.Add(
-                    column.ColumnName,
-                    column.ColumnName);
+                bulk.ColumnMappings.Add(column.ColumnName, column.ColumnName);
             }
 
-            await bulk.WriteToServerAsync(
-                table,
-                cancellationToken);
+            await bulk.WriteToServerAsync(table, cancellationToken);
         }
 
         private static async Task VerifyInsertedCountsAsync(
@@ -1545,26 +1385,17 @@ namespace DRW_Work_Tool.Core
             var expected =
                 new Dictionary<string, int>
                 {
-                    [DigimonBaseInfoTable] =
-                        prepared.Digimons.Count,
-                    [EvolutionTable] =
-                        prepared.Evolutions.Count,
-                    [EvolutionLineTable] =
-                        prepared.EvolutionLines.Count,
-                    [EvolutionStageTable] =
-                        prepared.EvolutionStages.Count,
-                    [SkillCodeTable] =
-                        prepared.SkillCodes.Count,
-                    [SkillCodeApplyTable] =
-                        prepared.SkillApplies.Count,
-                    [SkillInfoTable] =
-                        prepared.SkillInfos.Count,
-                    [DigimonSkillTable] =
-                        prepared.DigimonSkills.Count
+                    [DigimonBaseInfoTable] = prepared.Digimons.Count,
+                    [EvolutionTable] = prepared.Evolutions.Count,
+                    [EvolutionLineTable] = prepared.EvolutionLines.Count,
+                    [EvolutionStageTable] = prepared.EvolutionStages.Count,
+                    [SkillCodeTable] = prepared.SkillCodes.Count,
+                    [SkillCodeApplyTable] = prepared.SkillApplies.Count,
+                    [SkillInfoTable] = prepared.SkillInfos.Count,
+                    [DigimonSkillTable] = prepared.DigimonSkills.Count
                 };
 
-            foreach ((string table, int count)
-                     in expected)
+            foreach ((string table, int count) in expected)
             {
                 await using var command =
                     new SqlCommand(
@@ -1572,14 +1403,8 @@ namespace DRW_Work_Tool.Core
                         connection,
                         transaction);
 
-                object? scalar =
-                    await command.ExecuteScalarAsync(
-                        cancellationToken);
-
-                long actual =
-                    Convert.ToInt64(
-                        scalar,
-                        CultureInfo.InvariantCulture);
+                object? scalar = await command.ExecuteScalarAsync(cancellationToken);
+                long actual = Convert.ToInt64(scalar, CultureInfo.InvariantCulture);
 
                 if (actual != count)
                 {
@@ -1587,40 +1412,21 @@ namespace DRW_Work_Tool.Core
                         $"Verificação SQL falhou em {table}: esperado={count}, atual={actual}.");
                 }
 
-                log(
-                    $"VERIFY OK: {table} = {actual:N0} rows.");
+                log($"VERIFY OK: {table} = {actual:N0} rows.");
             }
         }
 
-        private static DataTable BuildDigimonBaseInfoTable(
-            IEnumerable<DigimonBaseRow> rows)
+        private static DataTable BuildDigimonBaseInfoTable(IEnumerable<DigimonBaseRow> rows)
         {
-            DataTable t =
-                CreateTable(
-                    ("Id", typeof(int)),
-                    ("Type", typeof(int)),
-                    ("Model", typeof(int)),
-                    ("Name", typeof(string)),
-                    ("Level", typeof(int)),
-                    ("ScaleType", typeof(int)),
-                    ("Attribute", typeof(int)),
-                    ("Element", typeof(int)),
-                    ("Family1", typeof(int)),
-                    ("Family2", typeof(int)),
-                    ("Family3", typeof(int)),
-                    ("ASValue", typeof(int)),
-                    ("ARValue", typeof(int)),
-                    ("ATValue", typeof(int)),
-                    ("BLValue", typeof(int)),
-                    ("CTValue", typeof(int)),
-                    ("DEValue", typeof(int)),
-                    ("DSValue", typeof(int)),
-                    ("EVValue", typeof(int)),
-                    ("HPValue", typeof(int)),
-                    ("HTValue", typeof(int)),
-                    ("MSValue", typeof(int)),
-                    ("WSValue", typeof(int)),
-                    ("EvolutionType", typeof(int)));
+            DataTable t = CreateTable(
+                ("Id", typeof(int)), ("Type", typeof(int)), ("Model", typeof(int)),
+                ("Name", typeof(string)), ("Level", typeof(int)), ("ScaleType", typeof(int)),
+                ("Attribute", typeof(int)), ("Element", typeof(int)), ("Family1", typeof(int)),
+                ("Family2", typeof(int)), ("Family3", typeof(int)), ("ASValue", typeof(int)),
+                ("ARValue", typeof(int)), ("ATValue", typeof(int)), ("BLValue", typeof(int)),
+                ("CTValue", typeof(int)), ("DEValue", typeof(int)), ("DSValue", typeof(int)),
+                ("EVValue", typeof(int)), ("HPValue", typeof(int)), ("HTValue", typeof(int)),
+                ("MSValue", typeof(int)), ("WSValue", typeof(int)), ("EvolutionType", typeof(int)));
 
             foreach (DigimonBaseRow r in rows)
             {
@@ -1637,463 +1443,208 @@ namespace DRW_Work_Tool.Core
             return t;
         }
 
-        private static DataTable BuildEvolutionTable(
-            IEnumerable<EvolutionRow> rows)
+        private static DataTable BuildEvolutionTable(IEnumerable<EvolutionRow> rows)
         {
-            DataTable t =
-                CreateTable(
-                    ("Id", typeof(int)),
-                    ("Type", typeof(int)),
-                    ("EvolutionRank", typeof(int)));
-
+            DataTable t = CreateTable(("Id", typeof(int)), ("Type", typeof(int)), ("EvolutionRank", typeof(int)));
             foreach (EvolutionRow r in rows)
                 t.Rows.Add(r.Id, r.Type, r.EvolutionRank);
-
             return t;
         }
 
-        private static DataTable BuildEvolutionLineTable(
-            IEnumerable<EvolutionLineRow> rows)
+        private static DataTable BuildEvolutionLineTable(IEnumerable<EvolutionLineRow> rows)
         {
-            DataTable t =
-                CreateTable(
-                    ("Id", typeof(int)),
-                    ("EvolutionId", typeof(int)),
-                    ("Type", typeof(int)),
-                    ("UnlockItemSection", typeof(int)),
-                    ("UnlockItemSectionAmount", typeof(int)),
-                    ("UnlockLevel", typeof(int)),
-                    ("UnlockQuestId", typeof(int)),
-                    ("SlotLevel", typeof(int)),
-                    ("RequiredAmount", typeof(int)),
-                    ("RequiredItem", typeof(int)));
+            DataTable t = CreateTable(
+                ("Id", typeof(int)), ("EvolutionId", typeof(int)), ("Type", typeof(int)),
+                ("UnlockItemSection", typeof(int)), ("UnlockItemSectionAmount", typeof(int)),
+                ("UnlockLevel", typeof(int)), ("UnlockQuestId", typeof(int)), ("SlotLevel", typeof(int)),
+                ("RequiredAmount", typeof(int)), ("RequiredItem", typeof(int)));
 
             foreach (EvolutionLineRow r in rows)
             {
-                t.Rows.Add(
-                    r.Id,
-                    r.EvolutionId,
-                    r.Type,
-                    r.UnlockItemSection,
-                    r.UnlockItemSectionAmount,
-                    r.UnlockLevel,
-                    r.UnlockQuestId,
-                    r.SlotLevel,
-                    r.RequiredAmount,
-                    r.RequiredItem);
+                t.Rows.Add(r.Id, r.EvolutionId, r.Type, r.UnlockItemSection,
+                    r.UnlockItemSectionAmount, r.UnlockLevel, r.UnlockQuestId,
+                    r.SlotLevel, r.RequiredAmount, r.RequiredItem);
             }
-
             return t;
         }
 
-        private static DataTable BuildEvolutionStageTable(
-            IEnumerable<EvolutionStageRow> rows)
+        private static DataTable BuildEvolutionStageTable(IEnumerable<EvolutionStageRow> rows)
         {
-            DataTable t =
-                CreateTable(
-                    ("Id", typeof(int)),
-                    ("Type", typeof(int)),
-                    ("Value", typeof(int)),
-                    ("EvolutionLineId", typeof(int)));
-
+            DataTable t = CreateTable(("Id", typeof(int)), ("Type", typeof(int)), ("Value", typeof(int)), ("EvolutionLineId", typeof(int)));
             foreach (EvolutionStageRow r in rows)
                 t.Rows.Add(r.Id, r.Type, r.Value, r.EvolutionLineId);
-
             return t;
         }
 
-        private static DataTable BuildSkillCodeTable(
-            IEnumerable<SkillCodeRow> rows)
+        private static DataTable BuildSkillCodeTable(IEnumerable<SkillCodeRow> rows)
         {
-            DataTable t =
-                CreateTable(
-                    ("Id", typeof(int)),
-                    ("SkillCode", typeof(int)),
-                    ("Comment", typeof(string)));
-
+            DataTable t = CreateTable(("Id", typeof(int)), ("SkillCode", typeof(int)), ("Comment", typeof(string)));
             foreach (SkillCodeRow r in rows)
                 t.Rows.Add(r.Id, r.SkillCode, r.Comment);
-
             return t;
         }
 
-        private static DataTable BuildSkillCodeApplyTable(
-            IEnumerable<SkillApplyRow> rows)
+        private static DataTable BuildSkillCodeApplyTable(IEnumerable<SkillApplyRow> rows)
         {
-            DataTable t =
-                CreateTable(
-                    ("Id", typeof(int)),
-                    ("Type", typeof(int)),
-                    ("Attribute", typeof(int)),
-                    ("Value", typeof(int)),
-                    ("AdditionalValue", typeof(int)),
-                    ("SkillCodeAssetId", typeof(int)),
-                    ("IncreaseValue", typeof(int)),
-                    ("Chance", typeof(int)));
+            DataTable t = CreateTable(
+                ("Id", typeof(int)), ("Type", typeof(int)), ("Attribute", typeof(int)),
+                ("Value", typeof(int)), ("AdditionalValue", typeof(int)),
+                ("SkillCodeAssetId", typeof(int)), ("IncreaseValue", typeof(int)), ("Chance", typeof(int)));
 
             foreach (SkillApplyRow r in rows)
-            {
-                t.Rows.Add(
-                    r.Id, r.Type, r.Attribute, r.Value,
-                    r.AdditionalValue, r.SkillCodeAssetId,
-                    r.IncreaseValue, r.Chance);
-            }
-
+                t.Rows.Add(r.Id, r.Type, r.Attribute, r.Value, r.AdditionalValue, r.SkillCodeAssetId, r.IncreaseValue, r.Chance);
             return t;
         }
 
-        private static DataTable BuildSkillInfoTable(
-            IEnumerable<SkillInfoRow> rows)
+        private static DataTable BuildSkillInfoTable(IEnumerable<SkillInfoRow> rows)
         {
-            DataTable t =
-                CreateTable(
-                    ("Id", typeof(int)),
-                    ("SkillId", typeof(int)),
-                    ("Name", typeof(string)),
-                    ("DSUsage", typeof(int)),
-                    ("HPUsage", typeof(int)),
-                    ("Value", typeof(int)),
-                    ("CastingTime", typeof(int)),
-                    ("Cooldown", typeof(int)),
-                    ("MaxLevel", typeof(int)),
-                    ("RequiredPoints", typeof(int)),
-                    ("Target", typeof(int)),
-                    ("AreaOfEffect", typeof(int)),
-                    ("AoEMinDamage", typeof(int)),
-                    ("AoEMaxDamage", typeof(int)),
-                    ("Range", typeof(int)),
-                    ("UnlockLevel", typeof(int)),
-                    ("MemoryChips", typeof(int)),
-                    ("FirstConditionCode", typeof(int)),
-                    ("SecondConditionCode", typeof(int)),
-                    ("ThirdConditionCode", typeof(int)),
-                    ("Type", typeof(int)),
-                    ("Description", typeof(string)),
-                    ("FamilyType", typeof(int)),
-                    ("SkillType", typeof(int)));
+            DataTable t = CreateTable(
+                ("Id", typeof(int)), ("SkillId", typeof(int)), ("Name", typeof(string)),
+                ("DSUsage", typeof(int)), ("HPUsage", typeof(int)), ("Value", typeof(int)),
+                ("CastingTime", typeof(int)), ("Cooldown", typeof(int)), ("MaxLevel", typeof(int)),
+                ("RequiredPoints", typeof(int)), ("Target", typeof(int)), ("AreaOfEffect", typeof(int)),
+                ("AoEMinDamage", typeof(int)), ("AoEMaxDamage", typeof(int)), ("Range", typeof(int)),
+                ("UnlockLevel", typeof(int)), ("MemoryChips", typeof(int)),
+                ("FirstConditionCode", typeof(int)), ("SecondConditionCode", typeof(int)),
+                ("ThirdConditionCode", typeof(int)), ("Type", typeof(int)),
+                ("Description", typeof(string)), ("FamilyType", typeof(int)), ("SkillType", typeof(int)));
 
             foreach (SkillInfoRow r in rows)
             {
                 t.Rows.Add(
-                    r.Id, r.SkillId, r.Name,
-                    r.DSUsage, r.HPUsage, r.Value,
-                    r.CastingTime, r.Cooldown, r.MaxLevel,
-                    r.RequiredPoints, r.Target, r.AreaOfEffect,
-                    r.AoEMinDamage, r.AoEMaxDamage, r.Range,
-                    r.UnlockLevel, r.MemoryChips,
-                    r.FirstConditionCode,
-                    r.SecondConditionCode,
-                    r.ThirdConditionCode,
-                    r.Type, r.Description,
-                    r.FamilyType, r.SkillType);
+                    r.Id, r.SkillId, r.Name, r.DSUsage, r.HPUsage, r.Value,
+                    r.CastingTime, r.Cooldown, r.MaxLevel, r.RequiredPoints,
+                    r.Target, r.AreaOfEffect, r.AoEMinDamage, r.AoEMaxDamage,
+                    r.Range, r.UnlockLevel, r.MemoryChips, r.FirstConditionCode,
+                    r.SecondConditionCode, r.ThirdConditionCode, r.Type,
+                    r.Description, r.FamilyType, r.SkillType);
             }
-
             return t;
         }
 
-        private static DataTable BuildDigimonSkillTable(
-            IEnumerable<DigimonSkillRow> rows)
+        private static DataTable BuildDigimonSkillTable(IEnumerable<DigimonSkillRow> rows)
         {
-            DataTable t =
-                CreateTable(
-                    ("Id", typeof(int)),
-                    ("Type", typeof(int)),
-                    ("Slot", typeof(int)),
-                    ("SkillId", typeof(int)));
-
+            DataTable t = CreateTable(("Id", typeof(int)), ("Type", typeof(int)), ("Slot", typeof(int)), ("SkillId", typeof(int)));
             foreach (DigimonSkillRow r in rows)
                 t.Rows.Add(r.Id, r.Type, r.Slot, r.SkillId);
-
             return t;
         }
 
-        private static DataTable CreateTable(
-            params (string Name, Type Type)[] columns)
+        private static DataTable CreateTable(params (string Name, Type Type)[] columns)
         {
             var table = new DataTable();
-
-            foreach ((string name, Type type)
-                     in columns)
-            {
-                table.Columns.Add(
-                    name,
-                    type);
-            }
-
+            foreach ((string name, Type type) in columns)
+                table.Columns.Add(name, type);
             return table;
         }
 
-        private static void EnsureFile(
-            string path,
-            string displayName)
+        private static void EnsureFile(string path, string displayName)
         {
             if (!File.Exists(path))
-            {
-                throw new FileNotFoundException(
-                    $"{displayName} não foi encontrado.",
-                    path);
-            }
+                throw new FileNotFoundException($"{displayName} não foi encontrado.", path);
         }
 
-        private static string ReadText(
-            XElement parent,
-            string name,
-            string context)
+        private static string ReadText(XElement parent, string name, string context)
         {
-            XElement? node =
-                parent.Element(name);
-
+            XElement? node = parent.Element(name);
             if (node == null)
-            {
-                throw new InvalidDataException(
-                    $"{context}: <{name}> ausente.");
-            }
-
+                throw new InvalidDataException($"{context}: <{name}> ausente.");
             return node.Value.Trim();
         }
 
-        private static string ReadOptionalText(
-            XElement parent,
-            string name) =>
-            parent.Element(name)?.Value
-            ?? string.Empty;
+        private static string ReadOptionalText(XElement parent, string name) =>
+            parent.Element(name)?.Value ?? string.Empty;
 
-        private static int ReadInt(
-            XElement parent,
-            string name,
-            string context)
+        private static int ReadInt(XElement parent, string name, string context) =>
+            ParseInt(ReadText(parent, name, context), $"{context} <{name}>");
+
+        private static uint ReadUInt(XElement parent, string name, string context)
         {
-            string raw =
-                ReadText(
-                    parent,
-                    name,
-                    context);
-
-            return ParseInt(
-                raw,
-                $"{context} <{name}>");
-        }
-
-        private static uint ReadUInt(
-            XElement parent,
-            string name,
-            string context)
-        {
-            string raw =
-                ReadText(
-                    parent,
-                    name,
-                    context);
-
-            if (!uint.TryParse(
-                    raw,
-                    NumberStyles.Integer,
-                    CultureInfo.InvariantCulture,
-                    out uint value))
-            {
-                throw new InvalidDataException(
-                    $"{context} <{name}>='{raw}' não é UInt32 válido.");
-            }
-
+            string raw = ReadText(parent, name, context);
+            if (!uint.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out uint value))
+                throw new InvalidDataException($"{context} <{name}>='{raw}' não é UInt32 válido.");
             return value;
         }
 
-        private static uint ReadUIntAttribute(
-            XElement node,
-            string name,
-            string context)
+        private static uint ReadUIntAttribute(XElement node, string name, string context)
         {
-            string raw =
-                node.Attribute(name)?.Value?.Trim()
-                ?? throw new InvalidDataException(
-                    $"{context}: atributo {name} ausente.");
-
-            if (!uint.TryParse(
-                    raw,
-                    NumberStyles.Integer,
-                    CultureInfo.InvariantCulture,
-                    out uint value))
-            {
-                throw new InvalidDataException(
-                    $"{context} @{name}='{raw}' não é UInt32 válido.");
-            }
-
+            string raw = node.Attribute(name)?.Value?.Trim()
+                ?? throw new InvalidDataException($"{context}: atributo {name} ausente.");
+            if (!uint.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out uint value))
+                throw new InvalidDataException($"{context} @{name}='{raw}' não é UInt32 válido.");
             return value;
         }
 
-        private static int ReadIntAttribute(
-            XElement node,
-            string name,
-            string context)
+        private static int ReadIntAttribute(XElement node, string name, string context)
         {
-            string raw =
-                node.Attribute(name)?.Value?.Trim()
-                ?? throw new InvalidDataException(
-                    $"{context}: atributo {name} ausente.");
-
-            return ParseInt(
-                raw,
-                $"{context} @{name}");
+            string raw = node.Attribute(name)?.Value?.Trim()
+                ?? throw new InvalidDataException($"{context}: atributo {name} ausente.");
+            return ParseInt(raw, $"{context} @{name}");
         }
 
-        private static int ParseInt(
-            string raw,
-            string context)
+        private static int ParseInt(string raw, string context)
         {
-            if (!long.TryParse(
-                    raw,
-                    NumberStyles.Integer,
-                    CultureInfo.InvariantCulture,
-                    out long value))
-            {
-                throw new InvalidDataException(
-                    $"{context}='{raw}' não é inteiro válido.");
-            }
-
-            if (value < int.MinValue ||
-                value > int.MaxValue)
-            {
-                throw new OverflowException(
-                    $"{context}={value} não cabe em SQL Int32.");
-            }
-
+            if (!long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value))
+                throw new InvalidDataException($"{context}='{raw}' não é inteiro válido.");
+            if (value < int.MinValue || value > int.MaxValue)
+                throw new OverflowException($"{context}={value} não cabe em SQL Int32.");
             return (int)value;
         }
 
-        private static int ReadSkillCastingTime(
-            XElement node,
-            uint skillId,
-            Action<string> log)
+        private static int ReadSkillCastingTime(XElement node, uint skillId, Action<string> log)
         {
-            int value =
-                ReadIntLikeDecimal(
-                    node,
-                    "s_fCastingTime",
-                    $"Skill {skillId}");
+            int value = ReadIntLikeDecimal(node, "s_fCastingTime", $"Skill {skillId}");
 
-            // The supplied client Skill.xml contains exactly eight records
-            // with this repeated outlier. All ordinary CastingTime values
-            // in the same source are <= 8500. The database SkillInfo column
-            // rejects 107479040, so preserve the XML but normalize this
-            // known client-side sentinel/anomalous value to zero for DB use.
             if (value == 107479040)
             {
-                string name =
-                    ReadOptionalText(
-                        node,
-                        "s_szName");
-
+                string name = ReadOptionalText(node, "s_szName");
                 log(
                     $"WARNING: Skill {skillId}" +
-                    (string.IsNullOrWhiteSpace(name)
-                        ? string.Empty
-                        : $" ({name})") +
+                    (string.IsNullOrWhiteSpace(name) ? string.Empty : $" ({name})") +
                     ": s_fCastingTime=107479040 é um valor anómalo do client. " +
                     "CastingTime será importado como 0; Skill.xml não será alterado.");
-
                 return 0;
             }
 
-            // Keep other values strict. This prevents another impossible
-            // casting value from reaching SqlBulkCopy after tables are cleared.
-            if (value < 0 ||
-                value > 60000)
+            if (value < 0 || value > 60000)
             {
                 throw new InvalidDataException(
                     $"Skill {skillId}: s_fCastingTime={value} está fora do intervalo seguro 0..60000. " +
                     "Import cancelado durante a validação, antes de alterar a database.");
             }
-
             return value;
         }
 
-        private static int ReadTinyInt(
-            XElement parent,
-            string name,
-            string context)
+        private static int ReadTinyInt(XElement parent, string name, string context)
         {
-            int value =
-                ReadInt(
-                    parent,
-                    name,
-                    context);
-
-            if (value < byte.MinValue ||
-                value > byte.MaxValue)
-            {
-                throw new InvalidDataException(
-                    $"{context} <{name}>={value} não cabe em SQL tinyint (0..255).");
-            }
-
+            int value = ReadInt(parent, name, context);
+            if (value < byte.MinValue || value > byte.MaxValue)
+                throw new InvalidDataException($"{context} <{name}>={value} não cabe em SQL tinyint (0..255).");
             return value;
         }
 
-        private static int ReadIntLikeDecimal(
-            XElement parent,
-            string name,
-            string context)
+        private static int ReadIntLikeDecimal(XElement parent, string name, string context)
         {
-            string raw =
-                ReadText(
-                    parent,
-                    name,
-                    context);
-
-            if (!decimal.TryParse(
-                    raw,
-                    NumberStyles.Float,
-                    CultureInfo.InvariantCulture,
-                    out decimal value))
-            {
-                throw new InvalidDataException(
-                    $"{context} <{name}>='{raw}' não é numérico válido.");
-            }
-
-            if (value < int.MinValue ||
-                value > int.MaxValue)
-            {
-                throw new OverflowException(
-                    $"{context} <{name}>={value} não cabe em SQL Int32.");
-            }
-
-            return decimal.ToInt32(
-                decimal.Truncate(value));
+            string raw = ReadText(parent, name, context);
+            if (!decimal.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out decimal value))
+                throw new InvalidDataException($"{context} <{name}>='{raw}' não é numérico válido.");
+            if (value < int.MinValue || value > int.MaxValue)
+                throw new OverflowException($"{context} <{name}>={value} não cabe em SQL Int32.");
+            return decimal.ToInt32(decimal.Truncate(value));
         }
 
-        private static int[] ReadCsvTriple(
-            string raw,
-            string context)
+        private static int[] ReadCsvTriple(string raw, string context)
         {
-            string[] parts =
-                raw.Split(
-                    ',',
-                    StringSplitOptions.TrimEntries);
-
+            string[] parts = raw.Split(',', StringSplitOptions.TrimEntries);
             if (parts.Length != 3)
-            {
-                throw new InvalidDataException(
-                    $"{context}: esperado A,B,C; recebido '{raw}'.");
-            }
-
-            return parts
-                .Select(
-                    (x, i) =>
-                        ParseInt(
-                            x,
-                            $"{context}[{i}]"))
-                .ToArray();
+                throw new InvalidDataException($"{context}: esperado A,B,C; recebido '{raw}'.");
+            return parts.Select((x, i) => ParseInt(x, $"{context}[{i}]")).ToArray();
         }
 
-        private static int CheckedInt(
-            uint value,
-            string context)
+        private static int CheckedInt(uint value, string context)
         {
             if (value > int.MaxValue)
-            {
-                throw new OverflowException(
-                    $"{context}={value} não cabe em SQL Int32.");
-            }
-
+                throw new OverflowException($"{context}={value} não cabe em SQL Int32.");
             return (int)value;
         }
 
@@ -2230,25 +1781,17 @@ namespace DRW_Work_Tool.Core
             public int Slot { get; init; }
         }
 
-        private sealed class SkillAssociationComparer :
-            IEqualityComparer<SkillAssociation>
+        private sealed class SkillAssociationComparer : IEqualityComparer<SkillAssociation>
         {
-            public static readonly SkillAssociationComparer Instance =
-                new();
+            public static readonly SkillAssociationComparer Instance = new();
 
-            public bool Equals(
-                SkillAssociation? x,
-                SkillAssociation? y) =>
-                x != null &&
-                y != null &&
+            public bool Equals(SkillAssociation? x, SkillAssociation? y) =>
+                x != null && y != null &&
                 x.DigimonType == y.DigimonType &&
                 x.Slot == y.Slot;
 
-            public int GetHashCode(
-                SkillAssociation obj) =>
-                HashCode.Combine(
-                    obj.DigimonType,
-                    obj.Slot);
+            public int GetHashCode(SkillAssociation obj) =>
+                HashCode.Combine(obj.DigimonType, obj.Slot);
         }
     }
 }
