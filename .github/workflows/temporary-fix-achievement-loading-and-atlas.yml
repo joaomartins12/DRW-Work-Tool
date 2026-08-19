@@ -1,0 +1,175 @@
+name: Fix Achievement Loading And Atlas
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch Achievement loading and atlas category
+        shell: python
+        run: |
+          from pathlib import Path
+
+          editor = Path("DRW Work Tool/Form1.AchievementEditor.cs")
+          text = editor.read_text(encoding="utf-8")
+
+          if "using System.Threading.Tasks;" not in text:
+              text = text.replace("using System.Linq;\n", "using System.Linq;\nusing System.Threading.Tasks;\n", 1)
+
+          old = '''        private async void OpenAchievementBrowser(string xmlPath)
+        {
+            string full = Path.GetFullPath(xmlPath);
+            var page = CreateDarkTab("Achieve.xml");
+            page.Name = full;
+            page.Controls.Add(new EditorLoadingView(
+                "Loading Achievement Database",
+                "Reading titles, achievement icons, Buff.xml and related Quest.xml entries."));
+            editorTabs.TabPages.Add(page);
+            editorTabs.SelectedTab = page;
+            await System.Threading.Tasks.Task.Yield();
+
+            try
+            {
+                BuildAchievementBrowser(page, new AchievementService(full));
+            }
+            catch (Exception ex)
+            {
+                page.Controls.Clear();
+                page.Controls.Add(CreateInfoLabel("Achieve.xml could not be loaded.\\r\\n\\r\\n" + ex.Message));
+            }
+        }
+'''
+
+          new = '''        private async void OpenAchievementBrowser(string xmlPath)
+        {
+            string full = Path.GetFullPath(xmlPath);
+
+            TabPage? existing = editorTabs.TabPages
+                .Cast<TabPage>()
+                .FirstOrDefault(x =>
+                    string.Equals(x.Name, full, StringComparison.OrdinalIgnoreCase) &&
+                    (x.Tag is AchievementBrowseState || ContainsAchievementLoadingView(x)));
+
+            if (existing != null)
+            {
+                editorTabs.SelectedTab = existing;
+                return;
+            }
+
+            var page = CreateDarkTab("Achieve.xml");
+            page.Name = full;
+
+            var loading = new EditorLoadingView(
+                "Loading Achievement / Title Editor",
+                "Loading Achieve.xml, Quest.xml, Buff.xml and title icon atlases achieve_icon / achieve_icon_02 / achieve_icon_03...");
+
+            page.Controls.Add(loading);
+            editorTabs.TabPages.Add(page);
+            editorTabs.SelectedTab = page;
+
+            // Force one full UI message-loop turn so the loading view is painted
+            // before XML parsing and ImageDatabase warm-up begin.
+            await Task.Delay(35);
+
+            try
+            {
+                AchievementService service = await Task.Run(() =>
+                {
+                    var loaded = new AchievementService(full);
+
+                    // Warm the exact title-icon atlas category before the browser
+                    // replaces the loading view. This resolves achieve_icon.dds,
+                    // achieve_icon_02.dds and achieve_icon_03.dds through ImgDatabase.
+                    foreach (uint iconId in loaded.Records
+                        .Select(x => UInt(x, "s_nIcon"))
+                        .Where(x => x > 0)
+                        .Distinct())
+                    {
+                        using Bitmap? preview =
+                            ImageDatabasePreview.TryLoadInterfaceIcon(iconId, "Achieve");
+                    }
+
+                    return loaded;
+                });
+
+                if (page.IsDisposed)
+                    return;
+
+                BuildAchievementBrowser(page, service);
+
+                // Let WinForms finish laying out the cards, then populate their
+                // previews before we consider the editor completely opened.
+                await Task.Yield();
+
+                if (page.Tag is AchievementBrowseState state)
+                    ApplyVisibleAchievementSiconPreviews(state);
+            }
+            catch (Exception ex)
+            {
+                if (page.IsDisposed)
+                    return;
+
+                page.Controls.Clear();
+                page.Controls.Add(CreateInfoLabel(
+                    "Achieve.xml could not be loaded.\\r\\n\\r\\n" + ex.Message));
+
+                AppLogger.ErrorDetailed(
+                    "Achievement Editor",
+                    ex.Message,
+                    "Verify Achieve.xml, Quest.xml, Buff.xml and achieve_icon atlas mappings in ImgDatabase.");
+            }
+        }
+'''
+
+          if old not in text:
+              raise SystemExit("OpenAchievementBrowser block not found")
+          text = text.replace(old, new, 1)
+          editor.write_text(text, encoding="utf-8")
+
+          integration = Path("DRW Work Tool/Form1.AchievementIntegration.cs")
+          itext = integration.read_text(encoding="utf-8")
+
+          itext = itext.replace(
+              '''                // Title icons use the same sicon01-sicon07 family used by
+                // Skill/Buff previews, so resolve them through category Skill.
+                picture.Image = ImageDatabasePreview.TryLoadInterfaceIcon(
+                    iconId,
+                    "Skill");''',
+              '''                // Achievement/title icons live in achieve_icon.dds,
+                // achieve_icon_02.dds and achieve_icon_03.dds.
+                picture.Image = ImageDatabasePreview.TryLoadInterfaceIcon(
+                    iconId,
+                    "Achieve");''')
+
+          # Rename the old Sicon-oriented helpers/comments to neutral Achievement names
+          # without changing behavior/call graph.
+          itext = itext.replace("EnsureAchievementSiconBinding", "EnsureAchievementIconBinding")
+          itext = itext.replace("ApplyVisibleAchievementSiconPreviews", "ApplyVisibleAchievementIconPreviews")
+          itext = itext.replace("AchievementSiconBinding", "AchievementIconBinding")
+
+          integration.write_text(itext, encoding="utf-8")
+
+          # Keep editor call names consistent after helper rename.
+          text = editor.read_text(encoding="utf-8")
+          text = text.replace("ApplyVisibleAchievementSiconPreviews", "ApplyVisibleAchievementIconPreviews")
+          editor.write_text(text, encoding="utf-8")
+
+      - name: Commit fix and remove temporary workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "DRW Work Tool/Form1.AchievementEditor.cs" "DRW Work Tool/Form1.AchievementIntegration.cs"
+          git rm .github/workflows/temporary-fix-achievement-loading-and-atlas.yml
+          git commit -m "Fix Achievement loading lifecycle and title icon atlases"
+          git push origin master
