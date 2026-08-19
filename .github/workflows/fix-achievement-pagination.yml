@@ -1,0 +1,119 @@
+name: Fix Achievement Pagination
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch Achievement editor pagination
+        shell: python
+        run: |
+          from pathlib import Path
+
+          editor = Path('DRW Work Tool/Form1.AchievementEditor.cs')
+          text = editor.read_text(encoding='utf-8-sig')
+
+          text = text.replace('private const int AchievementCardsPerPage = 24;', 'private const int AchievementCardsPerPage = 30;', 1)
+
+          old_state = '''            public required Label Count { get; init; }\n            public int PageIndex { get; set; }\n            public List<XElement> Filtered { get; set; } = new();'''
+          new_state = '''            public required Label Count { get; init; }\n            public required Button Previous { get; init; }\n            public required Button Next { get; init; }\n            public required Label PageInfo { get; init; }\n            public int PageIndex { get; set; }\n            public List<XElement> Filtered { get; set; } = new();'''
+          if old_state not in text:
+              raise SystemExit('AchievementBrowseState block not found')
+          text = text.replace(old_state, new_state, 1)
+
+          old_build = '''            var header = new Panel { Dock = DockStyle.Top, Height = 112, BackColor = CEditor };'''
+          text = text.replace(old_build, '''            var header = new Panel { Dock = DockStyle.Top, Height = 146, BackColor = CEditor };''', 1)
+
+          old_count_results = '''            var count = new Label { ForeColor = CMuted, AutoSize = true, Location = new Point(10, 96) };\n            var results = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, FlowDirection = FlowDirection.TopDown,'''
+          new_count_results = '''            var count = new Label { ForeColor = CMuted, AutoSize = true, Location = new Point(10, 104) };\n            var previous = CreateEditorActionButton("◀ PREVIOUS");\n            previous.Size = new Size(112, 30);\n            previous.Anchor = AnchorStyles.Top | AnchorStyles.Right;\n            var pageInfo = new Label { ForeColor = CText, Size = new Size(82, 30), TextAlign = ContentAlignment.MiddleCenter, Anchor = AnchorStyles.Top | AnchorStyles.Right };\n            var next = CreateEditorActionButton("NEXT ▶");\n            next.Size = new Size(96, 30);\n            next.Anchor = AnchorStyles.Top | AnchorStyles.Right;\n            var results = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, FlowDirection = FlowDirection.TopDown,'''
+          if old_count_results not in text:
+              raise SystemExit('Base count/results block not found')
+          text = text.replace(old_count_results, new_count_results, 1)
+
+          old_header_state = '''            header.Controls.AddRange(new Control[] { title, sub, search, create, count });\n            root.Controls.Add(results); root.Controls.Add(header); page.Controls.Add(root);\n            var state = new AchievementBrowseState { Service = service, Results = results, Search = search, Count = count };'''
+          new_header_state = '''            header.Controls.AddRange(new Control[] { title, sub, search, create, count, previous, pageInfo, next });\n            root.Controls.Add(results); root.Controls.Add(header); page.Controls.Add(root);\n            var state = new AchievementBrowseState { Service = service, Results = results, Search = search, Count = count, Previous = previous, Next = next, PageInfo = pageInfo };'''
+          if old_header_state not in text:
+              raise SystemExit('Base header/state block not found')
+          text = text.replace(old_header_state, new_header_state, 1)
+
+          old_layout_events = '''                create.Location = new Point(Math.Max(150, header.ClientSize.Width - create.Width - 8), 6);\n                search.Width = Math.Max(220, header.ClientSize.Width - 16);\n            }\n            header.Resize += (_, _) => Layout();\n            results.Resize += (_, _) => ResizeAchievementCards(results);\n            search.TextChanged += (_, _) => RefreshAchievementBrowser(state);\n            create.Click += (_, _) => OpenAchievementEditTab(service, service.CreateNewNode(), null, true);\n            Layout(); RefreshAchievementBrowser(state);'''
+          new_layout_events = '''                create.Location = new Point(Math.Max(150, header.ClientSize.Width - create.Width - 8), 6);\n                search.Width = Math.Max(220, header.ClientSize.Width - 16);\n                next.Location = new Point(Math.Max(300, header.ClientSize.Width - next.Width - 8), 108);\n                pageInfo.Location = new Point(next.Left - pageInfo.Width - 8, 108);\n                previous.Location = new Point(pageInfo.Left - previous.Width - 8, 108);\n            }\n            header.Resize += (_, _) => Layout();\n            results.Resize += (_, _) => ResizeAchievementCards(results);\n            search.TextChanged += (_, _) => { state.PageIndex = 0; RefreshAchievementBrowser(state); };\n            previous.Click += (_, _) =>\n            {\n                if (state.PageIndex <= 0) return;\n                state.PageIndex--;\n                RefreshAchievementBrowser(state);\n                state.Results.AutoScrollPosition = Point.Empty;\n            };\n            next.Click += (_, _) =>\n            {\n                int pages = Math.Max(1, (int)Math.Ceiling(state.Filtered.Count / (double)AchievementCardsPerPage));\n                if (state.PageIndex >= pages - 1) return;\n                state.PageIndex++;\n                RefreshAchievementBrowser(state);\n                state.Results.AutoScrollPosition = Point.Empty;\n            };\n            create.Click += (_, _) => OpenAchievementEditTab(service, service.CreateNewNode(), null, true);\n            Layout(); RefreshAchievementBrowser(state);'''
+          if old_layout_events not in text:
+              raise SystemExit('Base layout/events block not found')
+          text = text.replace(old_layout_events, new_layout_events, 1)
+
+          old_refresh = '''            state.Results.SuspendLayout(); state.Results.Controls.Clear();\n            foreach (XElement node in state.Filtered.Take(300))\n                state.Results.Controls.Add(CreateAchievementCard(state, node));\n            state.Results.ResumeLayout();\n            state.Count.Text = $"Results: {state.Filtered.Count:N0} / {state.Service.Records.Count:N0}";\n            ResizeAchievementCards(state.Results);'''
+          new_refresh = '''            int pages = Math.Max(1, (int)Math.Ceiling(state.Filtered.Count / (double)AchievementCardsPerPage));\n            state.PageIndex = Math.Clamp(state.PageIndex, 0, pages - 1);\n            state.Results.SuspendLayout();\n            DisposeAchievementCardImages(state.Results);\n            state.Results.Controls.Clear();\n            foreach (XElement node in state.Filtered.Skip(state.PageIndex * AchievementCardsPerPage).Take(AchievementCardsPerPage))\n                state.Results.Controls.Add(CreateAchievementCard(state, node));\n            state.Results.ResumeLayout();\n            state.Count.Text = $"Results: {state.Filtered.Count:N0} / {state.Service.Records.Count:N0} • 30 cards per page";\n            state.PageInfo.Text = $"{state.PageIndex + 1} / {pages}";\n            state.Previous.Enabled = state.PageIndex > 0;\n            state.Next.Enabled = state.PageIndex < pages - 1;\n            ResizeAchievementCards(state.Results);'''
+          if old_refresh not in text:
+              raise SystemExit('Base refresh block not found')
+          text = text.replace(old_refresh, new_refresh, 1)
+
+          text = text.replace('Image = ImageDatabasePreview.TryLoadInterfaceIcon(iconId, "Achieve")', 'Image = AchievementIconAtlasCache.TryLoad(iconId)', 1)
+          text = text.replace('icon.Image = ImageDatabasePreview.TryLoadInterfaceIcon(iconId, "Achieve")', 'icon.Image = AchievementIconAtlasCache.TryLoad(iconId)', 1)
+
+          editor.write_text(text, encoding='utf-8')
+
+          integration = Path('DRW Work Tool/Form1.AchievementIntegration.cs')
+          text = integration.read_text(encoding='utf-8-sig')
+
+          text = text.replace('''                Height = 112,''', '''                Height = 146,''', 1)
+
+          old_count = '''            var count = new Label\n            {\n                ForeColor = CMuted,\n                AutoSize = true,\n                Location = new Point(10, 96)\n            };\n\n            var results = new FlowLayoutPanel'''
+          new_count = '''            var count = new Label\n            {\n                ForeColor = CMuted,\n                AutoSize = true,\n                Location = new Point(10, 104)\n            };\n\n            var previous = CreateEditorActionButton("◀ PREVIOUS");\n            previous.Size = new Size(112, 30);\n            previous.Anchor = AnchorStyles.Top | AnchorStyles.Right;\n\n            var pageInfo = new Label\n            {\n                ForeColor = CText,\n                Size = new Size(82, 30),\n                TextAlign = ContentAlignment.MiddleCenter,\n                Anchor = AnchorStyles.Top | AnchorStyles.Right\n            };\n\n            var next = CreateEditorActionButton("NEXT ▶");\n            next.Size = new Size(96, 30);\n            next.Anchor = AnchorStyles.Top | AnchorStyles.Right;\n\n            var results = new FlowLayoutPanel'''
+          if old_count not in text:
+              raise SystemExit('Prepared count block not found')
+          text = text.replace(old_count, new_count, 1)
+
+          old_controls = '''                search,\n                create,\n                count\n            });'''
+          new_controls = '''                search,\n                create,\n                count,\n                previous,\n                pageInfo,\n                next\n            });'''
+          if old_controls not in text:
+              raise SystemExit('Prepared header controls block not found')
+          text = text.replace(old_controls, new_controls, 1)
+
+          old_state2 = '''                Results = results,\n                Search = search,\n                Count = count\n            };'''
+          new_state2 = '''                Results = results,\n                Search = search,\n                Count = count,\n                Previous = previous,\n                Next = next,\n                PageInfo = pageInfo\n            };'''
+          if old_state2 not in text:
+              raise SystemExit('Prepared state init block not found')
+          text = text.replace(old_state2, new_state2, 1)
+
+          old_layout2 = '''                search.Width = Math.Max(220, header.ClientSize.Width - 16);\n            }'''
+          new_layout2 = '''                search.Width = Math.Max(220, header.ClientSize.Width - 16);\n\n                next.Location = new Point(\n                    Math.Max(300, header.ClientSize.Width - next.Width - 8),\n                    108);\n\n                pageInfo.Location = new Point(\n                    next.Left - pageInfo.Width - 8,\n                    108);\n\n                previous.Location = new Point(\n                    pageInfo.Left - previous.Width - 8,\n                    108);\n            }'''
+          if old_layout2 not in text:
+              raise SystemExit('Prepared layout block not found')
+          text = text.replace(old_layout2, new_layout2, 1)
+
+          old_search = '''            search.TextChanged += async (_, _) =>\n                await RefreshPreparedAchievementBrowserAsync(state);\n\n            create.Click += (_, _) =>'''
+          new_search = '''            search.TextChanged += async (_, _) =>\n            {\n                state.PageIndex = 0;\n                await RefreshPreparedAchievementBrowserAsync(state);\n            };\n\n            previous.Click += async (_, _) =>\n            {\n                if (state.PageIndex <= 0)\n                    return;\n\n                state.PageIndex--;\n                await RefreshPreparedAchievementBrowserAsync(state);\n                state.Results.AutoScrollPosition = Point.Empty;\n            };\n\n            next.Click += async (_, _) =>\n            {\n                int pages = Math.Max(\n                    1,\n                    (int)Math.Ceiling(\n                        state.Filtered.Count /\n                        (double)AchievementCardsPerPage));\n\n                if (state.PageIndex >= pages - 1)\n                    return;\n\n                state.PageIndex++;\n                await RefreshPreparedAchievementBrowserAsync(state);\n                state.Results.AutoScrollPosition = Point.Empty;\n            };\n\n            create.Click += (_, _) =>'''
+          if old_search not in text:
+              raise SystemExit('Prepared search event block not found')
+          text = text.replace(old_search, new_search, 1)
+
+          old_loop = '''            const int batchSize = 32;\n\n            for (int index = 0; index < state.Filtered.Count; index++)\n            {\n                XElement node = state.Filtered[index];\n                state.Results.Controls.Add(\n                    CreatePreparedAchievementCard(state, node));\n\n                if (keepLoadingResponsive &&\n                    (index + 1) % batchSize == 0)\n                {\n                    loading?.BringToFront();\n                    await Task.Yield();\n                }\n            }\n\n            state.Count.Text =\n                $"Results: {state.Filtered.Count:N0} / {state.Service.Records.Count:N0}";\n\n            ResizeAchievementCards(state.Results);\n            state.Results.PerformLayout();'''
+          new_loop = '''            int pages = Math.Max(\n                1,\n                (int)Math.Ceiling(\n                    state.Filtered.Count /\n                    (double)AchievementCardsPerPage));\n\n            state.PageIndex = Math.Clamp(\n                state.PageIndex,\n                0,\n                pages - 1);\n\n            List<XElement> pageRecords = state.Filtered\n                .Skip(state.PageIndex * AchievementCardsPerPage)\n                .Take(AchievementCardsPerPage)\n                .ToList();\n\n            const int batchSize = 10;\n\n            for (int index = 0; index < pageRecords.Count; index++)\n            {\n                XElement node = pageRecords[index];\n                state.Results.Controls.Add(\n                    CreatePreparedAchievementCard(state, node));\n\n                if (keepLoadingResponsive &&\n                    (index + 1) % batchSize == 0)\n                {\n                    loading?.BringToFront();\n                    await Task.Yield();\n                }\n            }\n\n            state.Count.Text =\n                $"Results: {state.Filtered.Count:N0} / {state.Service.Records.Count:N0} • 30 cards per page";\n\n            state.PageInfo.Text =\n                $"{state.PageIndex + 1} / {pages}";\n\n            state.Previous.Enabled =\n                state.PageIndex > 0;\n\n            state.Next.Enabled =\n                state.PageIndex < pages - 1;\n\n            ResizeAchievementCards(state.Results);\n            state.Results.PerformLayout();\n            ApplyPreparedAchievementIcons(state);'''
+          if old_loop not in text:
+              raise SystemExit('Prepared refresh loop block not found')
+          text = text.replace(old_loop, new_loop, 1)
+
+          integration.write_text(text, encoding='utf-8')
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "DRW Work Tool/Form1.AchievementEditor.cs" "DRW Work Tool/Form1.AchievementIntegration.cs"
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Paginate Achievement cards and stabilize rendering"
+            git push origin master
+          fi
