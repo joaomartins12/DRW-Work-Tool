@@ -1,22 +1,16 @@
 using DRW_Work_Tool.Core;
 using System;
-using System.Collections.Generic;
 using System.Drawing;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using System.Xml.Linq;
 
 namespace DRW_Work_Tool
 {
     public partial class Form1
     {
-        private readonly HashSet<Control> _digimonBookScrollWired = new();
-        private readonly HashSet<DigimonBookTabState> _digimonBookInitialScrollDone = new();
-        private readonly HashSet<PictureBox> _digimonBookBookInfoIconWired = new();
         private bool _digimonBookRuntimeHooksInstalled;
 
         private void InstallDigimonBookRuntimeHooks()
@@ -29,6 +23,7 @@ namespace DRW_Work_Tool
                 if (args.Control is TabPage page)
                     BeginInvoke(new Action(() => PrepareDigimonBookPage(page)));
             };
+
             editorTabs.SelectedIndexChanged += (_, _) =>
             {
                 if (editorTabs.SelectedTab != null)
@@ -41,49 +36,14 @@ namespace DRW_Work_Tool
 
         private void PrepareDigimonBookPage(TabPage page)
         {
-            if (page.IsDisposed || page.Tag is not DigimonBookTabState state) return;
+            if (page.IsDisposed || page.Tag is not DigimonBookTabState state)
+                return;
 
             ReplaceDigimonBookImportButton(page);
             state.Content.AutoScroll = false;
 
-            if (!_digimonBookScrollWired.Contains(state.Content))
-            {
-                _digimonBookScrollWired.Add(state.Content);
-                state.Content.ControlAdded += (_, _) =>
-                {
-                    if (!state.Content.IsDisposed)
-                        BeginInvoke(new Action(() => PrepareDigimonBookPage(page)));
-                };
-                state.Content.Resize += (_, _) =>
-                {
-                    if (!state.Content.IsDisposed)
-                        BeginInvoke(new Action(() => FixDigimonBookScrollAndCards(state)));
-                };
-            }
-
-            FixDigimonBookScrollAndCards(state);
-            WireBookInfoIconPickers(page, state);
-
-            if (_digimonBookInitialScrollDone.Add(state))
-            {
-                BeginInvoke(new Action(() => ResetDigimonBookScrollToTop(state)));
-            }
-        }
-
-        private void ResetDigimonBookScrollToTop(DigimonBookTabState state)
-        {
-            if (state.Content.IsDisposed) return;
-            FlowLayoutPanel? list = state.Content.Controls.OfType<FlowLayoutPanel>().FirstOrDefault();
-            if (list == null || list.IsDisposed) return;
-
-            list.AutoScrollPosition = Point.Empty;
-            if (list.VerticalScroll.Visible)
-            {
-                try { list.VerticalScroll.Value = list.VerticalScroll.Minimum; }
-                catch { }
-            }
-            list.PerformLayout();
-            list.Invalidate(true);
+            ApplyDigimonBookStableLayout(page, state);
+            EnhanceBookInfoCards(page, state);
         }
 
         private void ReplaceDigimonBookImportButton(TabPage page)
@@ -91,7 +51,8 @@ namespace DRW_Work_Tool
             Button? old = EnumerateCashShopControls(page)
                 .OfType<Button>()
                 .FirstOrDefault(x => x.Text.Equals("IMPORT DB", StringComparison.OrdinalIgnoreCase));
-            if (old == null || old.Name == "DigimonBookImportLive" || old.Parent == null) return;
+            if (old == null || old.Name == "DigimonBookImportLive" || old.Parent == null)
+                return;
 
             Control host = old.Parent;
             var button = CreateEditorActionButton("IMPORT DB");
@@ -108,144 +69,14 @@ namespace DRW_Work_Tool
             button.BringToFront();
         }
 
-        private void FixDigimonBookScrollAndCards(DigimonBookTabState state)
-        {
-            if (state.Content.IsDisposed) return;
-            FlowLayoutPanel? list = state.Content.Controls.OfType<FlowLayoutPanel>().FirstOrDefault();
-            if (list == null || list.IsDisposed) return;
-
-            list.Dock = DockStyle.Fill;
-            list.AutoScroll = true;
-            list.WrapContents = false;
-            list.FlowDirection = FlowDirection.TopDown;
-            list.TabStop = true;
-            list.Padding = new Padding(0, 8, 10, 28);
-
-            WireWheelFocus(list, list);
-            foreach (Control child in list.Controls)
-                WireWheelFocus(child, list);
-
-            int usableWidth = Math.Max(680, list.ClientSize.Width - list.Padding.Horizontal - 18);
-            int totalHeight = list.Padding.Top + list.Padding.Bottom;
-
-            foreach (Panel card in list.Controls.OfType<Panel>())
-            {
-                card.Width = usableWidth;
-
-                // Cards are now sized correctly when they are created in Form1.DigimonBookEditor.cs.
-                // Do not expand/move their children again here; that was the source of clipped first cards.
-                int needed = card.Controls.Count == 0
-                    ? card.Height
-                    : card.Controls.Cast<Control>().Max(x => x.Bottom) + 14;
-                card.Height = Math.Max(card.Height, needed);
-
-                foreach (Button b in card.Controls.OfType<Button>()
-                    .Where(x => x.Text.StartsWith("EDIT", StringComparison.OrdinalIgnoreCase)))
-                {
-                    b.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-                    b.Left = Math.Max(8, card.ClientSize.Width - b.Width - 18);
-                }
-
-                totalHeight += card.Height + card.Margin.Vertical;
-            }
-
-            list.AutoScrollMinSize = new Size(0, Math.Max(0, totalHeight));
-        }
-
-        private void WireBookInfoIconPickers(TabPage page, DigimonBookTabState state)
-        {
-            if (!state.FileName.Equals("BookInfo.xml", StringComparison.OrdinalIgnoreCase) ||
-                !File.Exists(state.XmlPath) || state.Content.IsDisposed)
-                return;
-
-            FlowLayoutPanel? list = state.Content.Controls.OfType<FlowLayoutPanel>().FirstOrDefault();
-            if (list == null || list.IsDisposed) return;
-
-            List<XElement> rows;
-            try
-            {
-                rows = (XDocument.Load(state.XmlPath, LoadOptions.PreserveWhitespace)
-                    .Root?.Elements("BookInfo") ?? Enumerable.Empty<XElement>()).ToList();
-            }
-            catch
-            {
-                return;
-            }
-
-            Panel[] cards = list.Controls.OfType<Panel>().ToArray();
-            int count = Math.Min(rows.Count, cards.Length);
-
-            for (int i = 0; i < count; i++)
-            {
-                XElement row = rows[i];
-                PictureBox? icon = cards[i].Controls.OfType<PictureBox>().FirstOrDefault();
-                if (icon == null || icon.IsDisposed || !_digimonBookBookInfoIconWired.Add(icon))
-                    continue;
-
-                uint optionId = U(row, "s_dwOptID");
-                icon.Cursor = Cursors.Hand;
-                editorToolTip.SetToolTip(icon, "Click to select the BookInfo icon from sicon01-sicon07.");
-
-                icon.Click += async (_, _) =>
-                {
-                    if (page.IsDisposed || state.Content.IsDisposed) return;
-
-                    uint currentIcon = 0;
-                    try
-                    {
-                        XDocument latest = XDocument.Load(state.XmlPath, LoadOptions.PreserveWhitespace);
-                        XElement? currentRow = latest.Root?.Elements("BookInfo")
-                            .FirstOrDefault(x => U(x, "s_dwOptID") == optionId);
-                        if (currentRow != null)
-                            currentIcon = U(currentRow, "s_nIcon");
-                    }
-                    catch { }
-
-                    uint? selected = await OpenSkillAtlasIconBrowserAsync(
-                        currentIcon,
-                        $"BookInfo Option {optionId} — Select Icon");
-
-                    if (!selected.HasValue || page.IsDisposed) return;
-
-                    try
-                    {
-                        XDocument doc = XDocument.Load(state.XmlPath, LoadOptions.PreserveWhitespace);
-                        XElement? target = doc.Root?.Elements("BookInfo")
-                            .FirstOrDefault(x => U(x, "s_dwOptID") == optionId);
-                        if (target == null)
-                            throw new InvalidDataException($"BookInfo Option ID {optionId} was not found.");
-
-                        BookSet(target, "s_nIcon", selected.Value.ToString(CultureInfo.InvariantCulture));
-                        File.Copy(state.XmlPath, state.XmlPath + ".editor.bak", true);
-                        doc.Save(state.XmlPath);
-
-                        _digimonBookInitialScrollDone.Remove(state);
-                        BuildDigimonBookCards(state);
-                        PrepareDigimonBookPage(page);
-                    }
-                    catch (Exception ex)
-                    {
-                        ShowEditorError("BookInfo Icon", ex);
-                    }
-                };
-            }
-        }
-
-        private void WireWheelFocus(Control control, FlowLayoutPanel list)
-        {
-            if (_digimonBookScrollWired.Contains(control)) return;
-            _digimonBookScrollWired.Add(control);
-            control.MouseEnter += (_, _) =>
-            {
-                if (!list.IsDisposed && list.CanFocus) list.Focus();
-            };
-        }
-
         private async Task RunDigimonBookImportAsync()
         {
             string folder = Path.Combine(AppPaths.Xml, "Digimon_Book");
             string connection;
-            try { connection = DatabaseConnectionStore.Load(); }
+            try
+            {
+                connection = DatabaseConnectionStore.Load();
+            }
             catch (Exception ex)
             {
                 MessageBox.Show(ex.Message, "Digimon Book Import DB", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -264,14 +95,47 @@ namespace DRW_Work_Tool
                 "The operation runs in one SQL transaction and writes BEFORE_*.csv snapshots to Logs first.\r\n" +
                 "Groups no longer present in DeckOption.xml will be removed from DeckBuff/DeckBuffOption.",
                 "Digimon Book Import DB", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-            if (confirm != DialogResult.Yes) return;
+            if (confirm != DialogResult.Yes)
+                return;
 
             var page = CreateDarkTab("Digimon Book DB Import");
             var root = new Panel { Dock = DockStyle.Fill, BackColor = CEditor, Padding = new Padding(18) };
-            var title = new Label { Text = "Digimon Book → Database", ForeColor = CText, Font = new Font("Segoe UI Semibold", 13F, FontStyle.Bold), Location = new Point(8, 8), AutoSize = true };
-            var subtitle = new Label { Text = "Transactional import • automatic BEFORE snapshots • rollback on failure", ForeColor = CMuted, Location = new Point(10, 40), AutoSize = true };
-            var status = new Label { Text = "Preparing...", ForeColor = CMuted, Location = new Point(10, 68), Size = new Size(850, 24), AutoEllipsis = true };
-            var log = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Bottom, Height = 440, BackColor = Color.FromArgb(10, 10, 10), ForeColor = CText, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Consolas", 8.5F) };
+            var title = new Label
+            {
+                Text = "Digimon Book → Database",
+                ForeColor = CText,
+                Font = new Font("Segoe UI Semibold", 13F, FontStyle.Bold),
+                Location = new Point(8, 8),
+                AutoSize = true
+            };
+            var subtitle = new Label
+            {
+                Text = "Transactional import • automatic BEFORE snapshots • rollback on failure",
+                ForeColor = CMuted,
+                Location = new Point(10, 40),
+                AutoSize = true
+            };
+            var status = new Label
+            {
+                Text = "Preparing...",
+                ForeColor = CMuted,
+                Location = new Point(10, 68),
+                Size = new Size(850, 24),
+                AutoEllipsis = true
+            };
+            var log = new TextBox
+            {
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                Dock = DockStyle.Bottom,
+                Height = 440,
+                BackColor = Color.FromArgb(10, 10, 10),
+                ForeColor = CText,
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Consolas", 8.5F)
+            };
+
             root.Controls.AddRange(new Control[] { title, subtitle, status, log });
             page.Controls.Add(root);
             editorTabs.TabPages.Add(page);
@@ -304,6 +168,7 @@ namespace DRW_Work_Tool
 
                 status.Text = $"DONE • DeckBookInfo {summary.BookInfoRows:N0} • DeckBuff {summary.DeckBuffRows:N0} • DeckBuffOption {summary.DeckBuffOptionRows:N0}";
                 status.ForeColor = Color.FromArgb(120, 220, 145);
+
                 MessageBox.Show(
                     "Digimon Book import completed successfully.\r\n\r\n" +
                     $"DeckBookInfo: {summary.BookInfoRows:N0} rows\r\n" +
