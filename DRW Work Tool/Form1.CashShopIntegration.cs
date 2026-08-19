@@ -57,6 +57,10 @@ namespace DRW_Work_Tool
                 {
                     EnsureCashShopDirectOpenButton(page);
                 }
+                else if (page.Tag is CashShopBrowseState cashShop)
+                {
+                    EnsureCashShopDatabaseButtons(cashShop);
+                }
             }
         }
 
