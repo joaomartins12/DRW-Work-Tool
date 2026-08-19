@@ -21,6 +21,7 @@ namespace DRW_Work_Tool
             base.OnActivated(e);
             InitializeEditorPolish();
             InitializeSkillBuffIconBridge();
+            InstallDigimonBookRuntimeHooks();
             RefreshEditorPolish();
             RefreshSkillBuffIconBridge();
         }
