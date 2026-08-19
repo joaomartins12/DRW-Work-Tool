@@ -5,7 +5,6 @@ using System.Data;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -42,14 +41,18 @@ namespace DRW_Work_Tool.Core
             }
 
             Log("CASH SHOP -> DATABASE started.");
-            Log("Only canonical folders are imported: TamerInfo, DigimonInfo, AvatarInfo, PackageInfo. Numbered duplicate trees are ignored.");
-            Log("XML is fully parsed before the database transaction starts.");
+            Log("Canonical folders only: TamerInfo, DigimonInfo, AvatarInfo, PackageInfo. Numbered duplicate trees are ignored.");
+            Log("Confirmed legacy mapping: ONE Asset.CashShop row per CASHINFO purchase option; only the FIRST valid CashItems/Item is mirrored in the DB.");
 
             List<CashShopXmlDbRow> xmlRows = await Task.Run(
-                () => CashShopDatabaseXmlReader.Load(cashShopRoot, cancellationToken),
-                cancellationToken);
+                () => CashShopDatabaseXmlReader.Load(cashShopRoot, cancellationToken), cancellationToken);
+            (int containers, int optionsCount) = CashShopDatabaseXmlReader.CountStructure(cashShopRoot);
+            Log($"Prepared DB-shaped rows: {xmlRows.Count:N0}; containers={containers:N0}; CASHINFO options={optionsCount:N0}.");
 
-            Log($"Prepared flattened XML rows: {xmlRows.Count:N0}. One row per CASHINFO x CashItems/Item.");
+            // Every importable CASHINFO should produce exactly one DB row.
+            // A difference is allowed only for malformed/no-item options, and is explicitly logged.
+            if (xmlRows.Count != optionsCount)
+                Log($"WARNING: {optionsCount - xmlRows.Count:N0} CASHINFO option(s) have no valid first CashItems/Item and will not produce a DB row.");
 
             await using var connection = new SqlConnection(connectionString);
             await connection.OpenAsync(cancellationToken);
@@ -65,7 +68,7 @@ namespace DRW_Work_Tool.Core
 
             if (mapping.ComparedRows >= 25)
             {
-                Log($"Mapping auto-detected from current DB ({mapping.ComparedRows:N0} matched rows):");
+                Log($"Mapping verified against current working DB ({mapping.ComparedRows:N0} matched rows):");
                 Log($"  Quanty    <- {mapping.QuantitySource} ({mapping.QuantityMatchPercent:0.00}%)");
                 Log($"  Price     <- {mapping.PriceSource} ({mapping.PriceMatchPercent:0.00}%)");
                 Log($"  Activated <- {mapping.ActivatedSource} ({mapping.ActivatedMatchPercent:0.00}%)");
@@ -73,16 +76,21 @@ namespace DRW_Work_Tool.Core
             }
             else
             {
-                Log("Current DB has too few matching rows for reliable inference. Safe structural defaults will be used: Amount / nRealSellingPrice / Enabled / Name.");
+                Log("Too few current DB matches for inference. Using the confirmed legacy mapping: first Amount / real price / Enabled / Name without apostrophe.");
                 mapping = new CashShopDatabaseMapping();
             }
 
             if (mapping.ComparedRows >= 25 &&
-                (mapping.QuantityMatchPercent < 75 || mapping.PriceMatchPercent < 75 || mapping.ActivatedMatchPercent < 75))
+                (mapping.QuantityMatchPercent < 99.0 ||
+                 mapping.PriceMatchPercent < 99.0 ||
+                 mapping.ActivatedMatchPercent < 99.0 ||
+                 mapping.ItemNameMatchPercent < 99.0))
             {
                 throw new InvalidDataException(
-                    "Cash Shop mapping confidence is too low for a destructive import. Run COMPARE DB first and inspect HIGH_SIGNAL_REPORT.txt. " +
-                    $"Quantity={mapping.QuantityMatchPercent:0.00}%, Price={mapping.PriceMatchPercent:0.00}%, Activated={mapping.ActivatedMatchPercent:0.00}%.");
+                    "Cash Shop mapping no longer matches the known-good database closely enough for a destructive import. " +
+                    "Run COMPARE DB and inspect HIGH_SIGNAL_REPORT.txt. " +
+                    $"Quantity={mapping.QuantityMatchPercent:0.00}%, Price={mapping.PriceMatchPercent:0.00}%, " +
+                    $"Activated={mapping.ActivatedMatchPercent:0.00}%, ItemName={mapping.ItemNameMatchPercent:0.00}%.");
             }
 
             DataTable table = BuildTable(xmlRows, mapping, idIsIdentity, activatedIsBit);
@@ -110,8 +118,7 @@ namespace DRW_Work_Tool.Core
                 }
 
                 SqlBulkCopyOptions options = SqlBulkCopyOptions.CheckConstraints | SqlBulkCopyOptions.KeepNulls;
-                if (!idIsIdentity)
-                    options |= SqlBulkCopyOptions.KeepIdentity;
+                if (!idIsIdentity) options |= SqlBulkCopyOptions.KeepIdentity;
 
                 using var bulk = new SqlBulkCopy(connection, options, tx)
                 {
@@ -120,10 +127,8 @@ namespace DRW_Work_Tool.Core
                     BulkCopyTimeout = 180,
                     EnableStreaming = true
                 };
-
                 foreach (DataColumn column in table.Columns)
                     bulk.ColumnMappings.Add(column.ColumnName, column.ColumnName);
-
                 await bulk.WriteToServerAsync(table, cancellationToken);
 
                 await using (var verify = new SqlCommand($"SELECT COUNT_BIG(*) FROM {TableName};", connection, tx))
@@ -136,14 +141,7 @@ namespace DRW_Work_Tool.Core
                 await tx.CommitAsync(cancellationToken);
                 sw.Stop();
                 Log($"COMMIT OK. Asset.CashShop={table.Rows.Count:N0} rows in {sw.Elapsed.TotalSeconds:N1}s.");
-
-                return new CashShopDatabaseImportSummary
-                {
-                    Rows = table.Rows.Count,
-                    Mapping = mapping,
-                    Elapsed = sw.Elapsed,
-                    LogFile = logFile
-                };
+                return new CashShopDatabaseImportSummary { Rows=table.Rows.Count, Mapping=mapping, Elapsed=sw.Elapsed, LogFile=logFile };
             }
             catch
             {
@@ -152,23 +150,15 @@ namespace DRW_Work_Tool.Core
                     await tx.RollbackAsync(CancellationToken.None);
                     Log("ROLLBACK OK. Database restored to the state before Cash Shop import.");
                 }
-                catch (Exception rollbackEx)
-                {
-                    Log("ROLLBACK ERROR: " + rollbackEx.Message);
-                }
+                catch (Exception rollbackEx) { Log("ROLLBACK ERROR: " + rollbackEx.Message); }
                 throw;
             }
         }
 
-        private static DataTable BuildTable(
-            IReadOnlyList<CashShopXmlDbRow> rows,
-            CashShopDatabaseMapping mapping,
-            bool idIsIdentity,
-            bool activatedIsBit)
+        private static DataTable BuildTable(IReadOnlyList<CashShopXmlDbRow> rows, CashShopDatabaseMapping mapping, bool idIsIdentity, bool activatedIsBit)
         {
             var table = new DataTable();
-            if (!idIsIdentity)
-                table.Columns.Add("Id", typeof(int));
+            if (!idIsIdentity) table.Columns.Add("Id", typeof(int));
             table.Columns.Add("Unique_Id", typeof(long));
             table.Columns.Add("Item_Id", typeof(int));
             table.Columns.Add("Quanty", typeof(int));
@@ -181,7 +171,6 @@ namespace DRW_Work_Tool.Core
             {
                 int quantity = mapping.QuantitySource == "nDispCount" ? row.DisplayCount : row.Amount;
                 if (quantity <= 0) quantity = row.Amount > 0 ? row.Amount : 1;
-
                 int price = mapping.PriceSource == "nStandardSellingPrice" ? row.StandardPrice : row.RealPrice;
                 int activated = mapping.ActivatedSource == "bActive" ? row.BActive : row.Enabled;
                 string itemName = mapping.ItemNameSource switch
@@ -190,19 +179,13 @@ namespace DRW_Work_Tool.Core
                     "ItemList.Name" => row.ItemListName,
                     _ => row.Name
                 };
-
                 object activeValue = activatedIsBit ? activated != 0 : activated;
 
                 if (idIsIdentity)
-                {
                     table.Rows.Add(row.UniqueId, row.ItemId, quantity, price, activeValue, itemName, row.CashShopId);
-                }
                 else
-                {
                     table.Rows.Add(row.PhysicalId, row.UniqueId, row.ItemId, quantity, price, activeValue, itemName, row.CashShopId);
-                }
             }
-
             return table;
         }
 
