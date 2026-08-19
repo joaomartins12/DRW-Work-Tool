@@ -30,24 +30,41 @@ namespace DRW_Work_Tool
                 if (!uint.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out uint groupId))
                     continue;
 
+                Button? safe = card.Controls.OfType<Button>()
+                    .FirstOrDefault(x => x.Name == "DigimonBookDeckEditSafe");
+
+                Button? template = card.Controls.OfType<Button>()
+                    .FirstOrDefault(x =>
+                        x.Text.Equals("EDIT DECK", StringComparison.OrdinalIgnoreCase) &&
+                        x.Name != "DigimonBookDeckEditSafe");
+
                 foreach (Button old in card.Controls.OfType<Button>()
-                             .Where(x => x.Text.Equals("EDIT DECK", StringComparison.OrdinalIgnoreCase))
+                             .Where(x =>
+                                 x.Text.Equals("EDIT DECK", StringComparison.OrdinalIgnoreCase) &&
+                                 x.Name != "DigimonBookDeckEditSafe")
                              .ToArray())
                 {
                     old.Visible = false;
                 }
 
-                if (card.Controls.OfType<Button>().Any(x => x.Name == "DigimonBookDeckEditSafe"))
+                if (safe != null)
+                {
+                    safe.Size = template?.Size ?? safe.Size;
+                    safe.Location = template?.Location ?? new Point(Math.Max(12, card.ClientSize.Width - safe.Width - 18), 18);
+                    safe.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+                    safe.Visible = true;
+                    safe.Enabled = true;
+                    safe.BringToFront();
                     continue;
-
-                Button? template = card.Controls.OfType<Button>()
-                    .FirstOrDefault(x => x.Text.Equals("EDIT DECK", StringComparison.OrdinalIgnoreCase));
+                }
 
                 var edit = CreateEditorActionButton("EDIT DECK");
                 edit.Name = "DigimonBookDeckEditSafe";
                 edit.Size = template?.Size ?? new Size(110, 32);
                 edit.Location = template?.Location ?? new Point(Math.Max(12, card.ClientSize.Width - 128), 18);
                 edit.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+                edit.Visible = true;
+                edit.Enabled = true;
                 edit.Click += (_, _) => OpenDeckCompositionEditorTabSafe(state, groupId);
                 card.Controls.Add(edit);
                 edit.BringToFront();
@@ -113,15 +130,12 @@ namespace DRW_Work_Tool
                 int width = body.ClientSize.Width;
                 if (width <= 0) return;
 
-                // Keep the editor usable even in a narrow Work Tool window.
                 int desiredRight = Math.Max(260, Math.Min(360, width / 3));
                 int desiredLeft = width - desiredRight;
 
                 int minLeft = Math.Min(360, Math.Max(120, width / 3));
                 int minRight = Math.Min(240, Math.Max(100, width / 4));
 
-                // WinForms validates min sizes immediately, so make sure they
-                // can coexist at the current width before assigning them.
                 if (minLeft + minRight + body.SplitterWidth >= width)
                 {
                     minLeft = Math.Max(80, (width - body.SplitterWidth) / 2 - 20);
@@ -357,7 +371,6 @@ namespace DRW_Work_Tool
             editorTabs.TabPages.Add(page);
             editorTabs.SelectedTab = page;
 
-            // Delay splitter calculation until WinForms has assigned final tab bounds.
             BeginInvoke(new Action(() =>
             {
                 if (page.IsDisposed) return;
