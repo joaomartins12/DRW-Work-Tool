@@ -41,9 +41,43 @@ namespace DRW_Work_Tool
 
             ReplaceDigimonBookImportButton(page);
             state.Content.AutoScroll = false;
-
             ApplyDigimonBookStableLayout(page, state);
-            EnhanceBookInfoCards(page, state);
+
+            // ApplyDigimonBookStableLayout still schedules the legacy card polish.
+            // Run our internal-tab routing afterwards so modal EDIT buttons can no
+            // longer win the race or remain visible.
+            BeginInvoke(new Action(() =>
+            {
+                if (page.IsDisposed || state.Content.IsDisposed) return;
+                EnhanceDigimonBookInternalEditors(page, state);
+                HideLegacyDigimonBookEditButtons(state);
+
+                BeginInvoke(new Action(() =>
+                {
+                    if (page.IsDisposed || state.Content.IsDisposed) return;
+                    EnhanceDigimonBookInternalEditors(page, state);
+                    HideLegacyDigimonBookEditButtons(state);
+                }));
+            }));
+        }
+
+        private static void HideLegacyDigimonBookEditButtons(DigimonBookTabState state)
+        {
+            FlowLayoutPanel? list = state.Content.Controls.OfType<FlowLayoutPanel>().FirstOrDefault();
+            if (list == null || list.IsDisposed) return;
+
+            foreach (Panel card in list.Controls.OfType<Panel>())
+            {
+                foreach (Button button in card.Controls.OfType<Button>())
+                {
+                    bool bookInfoLive = button.Name == "DigimonBookBookInfoEditTab";
+                    bool deckLive = button.Name == "DigimonBookDeckEditTab";
+                    bool editText = button.Text.Equals("EDIT", StringComparison.OrdinalIgnoreCase) ||
+                                    button.Text.Equals("EDIT DECK", StringComparison.OrdinalIgnoreCase);
+                    if (editText && !bookInfoLive && !deckLive)
+                        button.Visible = false;
+                }
+            }
         }
 
         private void ReplaceDigimonBookImportButton(TabPage page)
