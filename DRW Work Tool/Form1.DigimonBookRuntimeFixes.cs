@@ -15,12 +15,6 @@ namespace DRW_Work_Tool
         private readonly HashSet<Control> _digimonBookScrollWired = new();
         private bool _digimonBookRuntimeHooksInstalled;
 
-        protected override void OnLoad(EventArgs e)
-        {
-            base.OnLoad(e);
-            InstallDigimonBookRuntimeHooks();
-        }
-
         private void InstallDigimonBookRuntimeHooks()
         {
             if (_digimonBookRuntimeHooksInstalled) return;
