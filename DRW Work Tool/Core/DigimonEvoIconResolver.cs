@@ -8,6 +8,10 @@ namespace DRW_Work_Tool.Core
 {
     /// <summary>
     /// Resolves Digimon preview icons with Digimon_List.xml + Model.xml-aware fallbacks.
+    ///
+    /// IMPORTANT: every Bitmap returned by TryLoad is owned by the caller.
+    /// Cached/preloaded images are cloned before being returned so UI controls
+    /// may safely Dispose their previous preview without corrupting the global cache.
     /// </summary>
     public static class DigimonEvoIconResolver
     {
@@ -35,15 +39,17 @@ namespace DRW_Work_Tool.Core
 
             Bitmap? image = digimonId == 0 ? null : EditorPreloadService.TryGetDigimonIcon(digimonId);
             if (image != null)
-                return image;
+                return CloneOwned(image);
 
             if (modelId != 0 && modelId != digimonId)
             {
                 image = EditorPreloadService.TryGetDigimonIcon(modelId);
                 if (image != null)
-                    return image;
+                    return CloneOwned(image);
             }
 
+            // The following loaders create new Bitmap instances, so ownership can
+            // be transferred directly to the caller.
             if (digimonId != 0)
             {
                 image = DigimonListEditorService.TryLoadIconFromDatabase(digimonId);
@@ -59,6 +65,18 @@ namespace DRW_Work_Tool.Core
             }
 
             return TryLoadFromModelFolder(digimonId, modelId);
+        }
+
+        private static Bitmap? CloneOwned(Image source)
+        {
+            try
+            {
+                return new Bitmap(source);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static Bitmap? TryLoadFromModelFolder(uint digimonId, uint modelId)
