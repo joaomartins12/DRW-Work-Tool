@@ -38,6 +38,7 @@ namespace DRW_Work_Tool.Core
         public string Name { get; init; } = string.Empty;
         public string CashName { get; init; } = string.Empty;
         public string ItemListName { get; init; } = string.Empty;
+        public int CashItemCount { get; init; }
         public string FilePath { get; init; } = string.Empty;
     }
 
@@ -55,10 +56,10 @@ namespace DRW_Work_Tool.Core
 
     public sealed class CashShopDatabaseMapping
     {
-        public string QuantitySource { get; init; } = "CashItems.Amount";
+        public string QuantitySource { get; init; } = "First CashItems.Amount";
         public string PriceSource { get; init; } = "nRealSellingPrice";
         public string ActivatedSource { get; init; } = "Enabled";
-        public string ItemNameSource { get; init; } = "Name";
+        public string ItemNameSource { get; init; } = "Name (remove apostrophe only)";
         public int ComparedRows { get; init; }
         public double QuantityMatchPercent { get; init; }
         public double PriceMatchPercent { get; init; }
@@ -68,14 +69,13 @@ namespace DRW_Work_Tool.Core
 
     internal static class CashShopDatabaseXmlReader
     {
-        private static readonly string[] CanonicalFolders =
-        {
-            "TamerInfo",
-            "DigimonInfo",
-            "AvatarInfo",
-            "PackageInfo"
-        };
+        private static readonly string[] CanonicalFolders = { "TamerInfo", "DigimonInfo", "AvatarInfo", "PackageInfo" };
 
+        // Confirmed by the user's known-good DB snapshot (2026-08-19):
+        // Asset.CashShop has ONE row per CASHINFO purchase option, not one row
+        // for every CashItems/Item child. For packages, the DB stores the FIRST
+        // valid CashItems/Item pair only. Additional package contents remain in
+        // the XML/client data and are intentionally not expanded into DB rows.
         public static List<CashShopXmlDbRow> Load(string cashShopRoot, CancellationToken token)
         {
             if (!Directory.Exists(cashShopRoot))
@@ -88,82 +88,64 @@ namespace DRW_Work_Tool.Core
             foreach (string folderName in CanonicalFolders)
             {
                 string folder = Path.Combine(cashShopRoot, folderName);
-                if (!Directory.Exists(folder))
-                    continue;
+                if (!Directory.Exists(folder)) continue;
 
-                foreach (string file in Directory.EnumerateFiles(folder, "*.xml", SearchOption.AllDirectories).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                foreach (string file in Directory.EnumerateFiles(folder, "*.xml", SearchOption.AllDirectories)
+                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
                 {
                     token.ThrowIfCancellationRequested();
                     XDocument doc;
                     try { doc = XDocument.Load(file, LoadOptions.None); }
                     catch { continue; }
-
-                    if (doc.Root?.Name.LocalName != "CashShopInformationCounts")
-                        continue;
+                    if (doc.Root?.Name.LocalName != "CashShopInformationCounts") continue;
 
                     foreach (XElement container in doc.Root.Elements("CashShopInformationCount"))
                     {
                         int cashShopId = ReadInt(container, "CashShopId");
                         XElement? cashInfo = container.Element("CashInfo");
-                        if (cashInfo == null)
-                            continue;
+                        if (cashInfo == null) continue;
 
                         foreach (XElement option in cashInfo.Elements("CASHINFO"))
                         {
-                            long uniqueId = ReadLong(option, "unique_id");
-                            int displayCount = ReadInt(option, "nDispCount");
-                            int realPrice = ReadInt(option, "nRealSellingPrice");
-                            int standardPrice = ReadInt(option, "nStandardSellingPrice");
-                            int enabled = ReadInt(option, "Enabled");
-                            int bActive = ReadInt(option, "bActive");
-                            string name = NormalizeName(option.Element("Name")?.Value);
-                            string cashName = NormalizeName(option.Element("CashName")?.Value);
+                            token.ThrowIfCancellationRequested();
+                            List<XElement> itemNodes = option.Element("CashItems")?.Elements("Item").ToList()
+                                ?? new List<XElement>();
+                            XElement? firstItem = itemNodes.FirstOrDefault(x => ReadInt(x, "ItemId") > 0);
+                            if (firstItem == null) continue;
 
-                            XElement? items = option.Element("CashItems");
-                            if (items == null)
-                                continue;
-
-                            foreach (XElement item in items.Elements("Item"))
+                            int itemId = ReadInt(firstItem, "ItemId");
+                            physical++;
+                            result.Add(new CashShopXmlDbRow
                             {
-                                token.ThrowIfCancellationRequested();
-                                int itemId = ReadInt(item, "ItemId");
-                                if (itemId <= 0)
-                                    continue;
-
-                                physical++;
-                                result.Add(new CashShopXmlDbRow
-                                {
-                                    PhysicalId = physical,
-                                    CashShopId = cashShopId,
-                                    UniqueId = uniqueId,
-                                    ItemId = itemId,
-                                    Amount = Math.Max(1, ReadInt(item, "Amount")),
-                                    DisplayCount = displayCount,
-                                    RealPrice = realPrice,
-                                    StandardPrice = standardPrice,
-                                    Enabled = enabled,
-                                    BActive = bActive,
-                                    Name = name,
-                                    CashName = cashName,
-                                    ItemListName = itemNames.TryGetValue(itemId, out string? itemName) ? itemName : string.Empty,
-                                    FilePath = file
-                                });
-                            }
+                                PhysicalId = physical,
+                                CashShopId = cashShopId,
+                                UniqueId = ReadLong(option, "unique_id"),
+                                ItemId = itemId,
+                                Amount = Math.Max(1, ReadInt(firstItem, "Amount")),
+                                DisplayCount = ReadInt(option, "nDispCount"),
+                                RealPrice = ReadInt(option, "nRealSellingPrice"),
+                                StandardPrice = ReadInt(option, "nStandardSellingPrice"),
+                                Enabled = ReadInt(option, "Enabled"),
+                                BActive = ReadInt(option, "bActive"),
+                                Name = DatabaseItemName(option.Element("Name")?.Value),
+                                CashName = DatabaseItemName(option.Element("CashName")?.Value),
+                                ItemListName = itemNames.TryGetValue(itemId, out string? itemName) ? itemName : string.Empty,
+                                CashItemCount = itemNodes.Count,
+                                FilePath = file
+                            });
                         }
                     }
                 }
             }
 
             if (result.Count == 0)
-                throw new InvalidDataException("No canonical Cash Shop item rows were found.");
-
+                throw new InvalidDataException("No canonical Cash Shop purchase-option rows were found.");
             return result;
         }
 
         public static (int Containers, int Options) CountStructure(string cashShopRoot)
         {
-            int containers = 0;
-            int options = 0;
+            int containers = 0, options = 0;
             foreach (string folderName in CanonicalFolders)
             {
                 string folder = Path.Combine(cashShopRoot, folderName);
@@ -189,9 +171,9 @@ namespace DRW_Work_Tool.Core
         {
             var result = new Dictionary<int, string>();
             if (!Directory.Exists(AppPaths.Xml)) return result;
-            string? path = Directory.EnumerateFiles(AppPaths.Xml, "ItemList.xml", SearchOption.AllDirectories).OrderBy(x => x.Length).FirstOrDefault();
+            string? path = Directory.EnumerateFiles(AppPaths.Xml, "ItemList.xml", SearchOption.AllDirectories)
+                .OrderBy(x => x.Length).FirstOrDefault();
             if (path == null) return result;
-
             try
             {
                 XDocument doc = XDocument.Load(path, LoadOptions.None);
@@ -201,20 +183,22 @@ namespace DRW_Work_Tool.Core
                     if (idNode == null || !int.TryParse(idNode.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int id) || id <= 0 || result.ContainsKey(id))
                         continue;
                     string name = node.Element("s_szName")?.Value ?? node.Element("s_szItemName")?.Value ?? node.Element("ItemName")?.Value ?? node.Element("Name")?.Value ?? string.Empty;
-                    result[id] = NormalizeName(name);
+                    result[id] = DatabaseItemName(name);
                 }
             }
             catch { }
-
             return result;
         }
 
-        private static string NormalizeName(string? value) =>
-            (value ?? string.Empty).Replace("\\n", " ").Replace("\r", " ").Replace("\n", " ").Trim();
+        // Exact legacy DB rule confirmed against all 4,064 comparable rows:
+        // preserve the XML's literal "\\n" formatting and remove apostrophes.
+        // Examples: "Red Power\\nGloves" stays multiline-token formatted;
+        // "Savers' Original" becomes "Savers Original".
+        internal static string DatabaseItemName(string? value) =>
+            (value ?? string.Empty).Trim().Replace("'", string.Empty, StringComparison.Ordinal);
 
         private static int ReadInt(XElement node, string name) =>
             int.TryParse(node.Element(name)?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value) ? value : 0;
-
         private static long ReadLong(XElement node, string name) =>
             long.TryParse(node.Element(name)?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value) ? value : 0L;
     }
@@ -224,32 +208,25 @@ namespace DRW_Work_Tool.Core
         public static CashShopDatabaseMapping Detect(IReadOnlyList<CashShopXmlDbRow> xml, IReadOnlyList<CashShopDbRow> db)
         {
             List<(CashShopXmlDbRow Xml, CashShopDbRow Db)> pairs = Match(xml, db);
-            if (pairs.Count == 0)
-                return new CashShopDatabaseMapping();
+            if (pairs.Count == 0) return new CashShopDatabaseMapping();
 
-            (string qtyName, double qtyPct) = BestNumber(pairs,
-                ("CashItems.Amount", x => x.Amount),
-                ("nDispCount", x => x.DisplayCount));
-
-            (string priceName, double pricePct) = BestNumber(pairs,
-                ("nRealSellingPrice", x => x.RealPrice),
-                ("nStandardSellingPrice", x => x.StandardPrice));
-
-            (string activeName, double activePct) = BestNumber(pairs,
-                ("Enabled", x => x.Enabled),
-                ("bActive", x => x.BActive));
-
-            (string nameSource, double namePct) = BestString(pairs,
-                ("Name", x => x.Name),
+            (string qty, double qtyPct) = BestNumber(pairs,
+                ("First CashItems.Amount", x => x.Amount), ("nDispCount", x => x.DisplayCount));
+            (string price, double pricePct) = BestNumber(pairs,
+                ("nRealSellingPrice", x => x.RealPrice), ("nStandardSellingPrice", x => x.StandardPrice));
+            (string active, double activePct) = BestNumber(pairs,
+                ("Enabled", x => x.Enabled), ("bActive", x => x.BActive));
+            (string itemName, double namePct) = BestString(pairs,
+                ("Name (remove apostrophe only)", x => x.Name),
                 ("CashName", x => x.CashName),
                 ("ItemList.Name", x => x.ItemListName));
 
             return new CashShopDatabaseMapping
             {
-                QuantitySource = qtyName,
-                PriceSource = priceName,
-                ActivatedSource = activeName,
-                ItemNameSource = nameSource,
+                QuantitySource = qty,
+                PriceSource = price,
+                ActivatedSource = active,
+                ItemNameSource = itemName,
                 ComparedRows = pairs.Count,
                 QuantityMatchPercent = qtyPct,
                 PriceMatchPercent = pricePct,
@@ -263,11 +240,8 @@ namespace DRW_Work_Tool.Core
             var queues = xml.GroupBy(Key).ToDictionary(g => g.Key, g => new Queue<CashShopXmlDbRow>(g.OrderBy(x => x.PhysicalId)));
             var pairs = new List<(CashShopXmlDbRow, CashShopDbRow)>();
             foreach (CashShopDbRow row in db.OrderBy(x => x.Id))
-            {
-                string key = Key(row);
-                if (queues.TryGetValue(key, out Queue<CashShopXmlDbRow>? queue) && queue.Count > 0)
-                    pairs.Add((queue.Dequeue(), row));
-            }
+                if (queues.TryGetValue(Key(row), out Queue<CashShopXmlDbRow>? q) && q.Count > 0)
+                    pairs.Add((q.Dequeue(), row));
             return pairs;
         }
 
@@ -276,33 +250,31 @@ namespace DRW_Work_Tool.Core
 
         private static (string Name, double Percent) BestNumber(List<(CashShopXmlDbRow Xml, CashShopDbRow Db)> pairs, params (string Name, Func<CashShopXmlDbRow, int> Read)[] candidates)
         {
-            string best = candidates[0].Name;
-            int bestMatch = -1;
-            foreach (var candidate in candidates)
+            string best = candidates[0].Name; int bestMatch = -1;
+            foreach (var c in candidates)
             {
-                int exact = pairs.Count(p => candidate.Read(p.Xml) == NumberFor(candidate.Name, p.Db));
-                if (exact > bestMatch) { bestMatch = exact; best = candidate.Name; }
+                int exact = pairs.Count(p => c.Read(p.Xml) == NumberFor(c.Name, p.Db));
+                if (exact > bestMatch) { best = c.Name; bestMatch = exact; }
             }
-            return (best, pairs.Count == 0 ? 0 : bestMatch * 100.0 / pairs.Count);
+            return (best, bestMatch * 100.0 / pairs.Count);
         }
 
         private static int NumberFor(string candidate, CashShopDbRow db)
         {
-            if (candidate is "CashItems.Amount" or "nDispCount") return db.Quantity;
+            if (candidate is "First CashItems.Amount" or "nDispCount") return db.Quantity;
             if (candidate is "nRealSellingPrice" or "nStandardSellingPrice") return db.Price;
             return db.Activated;
         }
 
         private static (string Name, double Percent) BestString(List<(CashShopXmlDbRow Xml, CashShopDbRow Db)> pairs, params (string Name, Func<CashShopXmlDbRow, string> Read)[] candidates)
         {
-            string best = candidates[0].Name;
-            int bestMatch = -1;
-            foreach (var candidate in candidates)
+            string best = candidates[0].Name; int bestMatch = -1;
+            foreach (var c in candidates)
             {
-                int exact = pairs.Count(p => string.Equals(candidate.Read(p.Xml), p.Db.ItemName, StringComparison.Ordinal));
-                if (exact > bestMatch) { bestMatch = exact; best = candidate.Name; }
+                int exact = pairs.Count(p => string.Equals(c.Read(p.Xml), p.Db.ItemName, StringComparison.Ordinal));
+                if (exact > bestMatch) { best = c.Name; bestMatch = exact; }
             }
-            return (best, pairs.Count == 0 ? 0 : bestMatch * 100.0 / pairs.Count);
+            return (best, bestMatch * 100.0 / pairs.Count);
         }
     }
 
@@ -314,7 +286,6 @@ namespace DRW_Work_Tool.Core
             string folder = Path.Combine(AppPaths.Logs, "CashShopDatabaseDiagnostic", started.ToString("yyyy-MM-dd_HH-mm-ss", CultureInfo.InvariantCulture));
             Directory.CreateDirectory(folder);
             string logPath = Path.Combine(folder, "diagnostic.log");
-
             void Log(string text)
             {
                 string line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {text}";
@@ -324,10 +295,9 @@ namespace DRW_Work_Tool.Core
 
             Log("CASH SHOP DATABASE DIAGNOSTIC started in READ-ONLY mode.");
             Log("No INSERT / UPDATE / DELETE is executed.");
-
             List<CashShopXmlDbRow> xml = await Task.Run(() => CashShopDatabaseXmlReader.Load(cashShopRoot, cancellationToken), cancellationToken);
             (int containers, int options) = CashShopDatabaseXmlReader.CountStructure(cashShopRoot);
-            Log($"Canonical XML: containers={containers:N0}, purchase options={options:N0}, flattened item rows={xml.Count:N0}.");
+            Log($"Canonical XML: containers={containers:N0}, purchase options={options:N0}, DB-shaped rows={xml.Count:N0} (FIRST CashItems/Item only).");
 
             await using var connection = new SqlConnection(connectionString);
             await connection.OpenAsync(cancellationToken);
@@ -336,30 +306,18 @@ namespace DRW_Work_Tool.Core
 
             List<(CashShopXmlDbRow Xml, CashShopDbRow Db)> pairs = CashShopDatabaseMappingDetector.Match(xml, db);
             CashShopDatabaseMapping mapping = CashShopDatabaseMappingDetector.Detect(xml, db);
-            Log($"Matched by Unique_Id + Item_Id + CashShopId: {pairs.Count:N0} rows.");
+            Log($"Matched by Unique_Id + FIRST Item_Id + CashShopId: {pairs.Count:N0} rows.");
             Log($"Best Quantity mapping: {mapping.QuantitySource} ({mapping.QuantityMatchPercent:0.00}%).");
             Log($"Best Price mapping: {mapping.PriceSource} ({mapping.PriceMatchPercent:0.00}%).");
             Log($"Best Activated mapping: {mapping.ActivatedSource} ({mapping.ActivatedMatchPercent:0.00}%).");
             Log($"Best ItemName mapping: {mapping.ItemNameSource} ({mapping.ItemNameMatchPercent:0.00}%).");
 
-            WriteFieldSummary(folder, pairs, mapping);
+            WriteFieldSummary(folder, pairs);
             WriteRaw(folder, pairs);
             string report = WriteHighSignal(folder, containers, options, xml, db, pairs, mapping);
-
             TimeSpan elapsed = DateTime.Now - started;
             Log($"Diagnostic completed in {elapsed.TotalSeconds:N1}s. Output: {folder}");
-
-            return new CashShopDatabaseDiagnosticSummary
-            {
-                XmlContainers = containers,
-                XmlOptions = options,
-                XmlFlattenedRows = xml.Count,
-                DatabaseRows = db.Count,
-                MatchedRows = pairs.Count,
-                OutputFolder = folder,
-                HighSignalReport = report,
-                Elapsed = elapsed
-            };
+            return new CashShopDatabaseDiagnosticSummary { XmlContainers=containers, XmlOptions=options, XmlFlattenedRows=xml.Count, DatabaseRows=db.Count, MatchedRows=pairs.Count, OutputFolder=folder, HighSignalReport=report, Elapsed=elapsed };
         }
 
         internal static async Task<List<CashShopDbRow>> ReadDatabaseAsync(SqlConnection connection, CancellationToken token)
@@ -369,104 +327,74 @@ namespace DRW_Work_Tool.Core
             await using var cmd = new SqlCommand(sql, connection) { CommandTimeout = 180 };
             await using var reader = await cmd.ExecuteReaderAsync(token);
             while (await reader.ReadAsync(token))
-            {
                 result.Add(new CashShopDbRow
                 {
-                    Id = Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture),
-                    UniqueId = Convert.ToInt64(reader.GetValue(1), CultureInfo.InvariantCulture),
-                    ItemId = Convert.ToInt32(reader.GetValue(2), CultureInfo.InvariantCulture),
-                    Quantity = Convert.ToInt32(reader.GetValue(3), CultureInfo.InvariantCulture),
-                    Price = Convert.ToInt32(reader.GetValue(4), CultureInfo.InvariantCulture),
-                    Activated = Convert.ToInt32(reader.GetValue(5), CultureInfo.InvariantCulture),
-                    ItemName = reader.IsDBNull(6) ? string.Empty : Convert.ToString(reader.GetValue(6), CultureInfo.InvariantCulture) ?? string.Empty,
-                    CashShopId = Convert.ToInt32(reader.GetValue(7), CultureInfo.InvariantCulture)
+                    Id=Convert.ToInt32(reader.GetValue(0),CultureInfo.InvariantCulture),
+                    UniqueId=Convert.ToInt64(reader.GetValue(1),CultureInfo.InvariantCulture),
+                    ItemId=Convert.ToInt32(reader.GetValue(2),CultureInfo.InvariantCulture),
+                    Quantity=Convert.ToInt32(reader.GetValue(3),CultureInfo.InvariantCulture),
+                    Price=Convert.ToInt32(reader.GetValue(4),CultureInfo.InvariantCulture),
+                    Activated=Convert.ToInt32(reader.GetValue(5),CultureInfo.InvariantCulture),
+                    ItemName=reader.IsDBNull(6)?string.Empty:Convert.ToString(reader.GetValue(6),CultureInfo.InvariantCulture)??string.Empty,
+                    CashShopId=Convert.ToInt32(reader.GetValue(7),CultureInfo.InvariantCulture)
                 });
-            }
             return result;
         }
 
-        private static void WriteFieldSummary(string folder, List<(CashShopXmlDbRow Xml, CashShopDbRow Db)> pairs, CashShopDatabaseMapping mapping)
+        private static void WriteFieldSummary(string folder, List<(CashShopXmlDbRow Xml, CashShopDbRow Db)> pairs)
         {
-            string path = Path.Combine(folder, "CashShop_FieldMatchSummary.csv");
-            using var w = new StreamWriter(path, false, new UTF8Encoding(true));
+            string path=Path.Combine(folder,"CashShop_FieldMatchSummary.csv");
+            using var w=new StreamWriter(path,false,new UTF8Encoding(true));
             w.WriteLine("DB_Field,XML_Candidate,Compared,ExactMatches,MatchPercent");
-            WriteNumber("Quanty", "CashItems.Amount", p => p.Xml.Amount, p => p.Db.Quantity);
-            WriteNumber("Quanty", "nDispCount", p => p.Xml.DisplayCount, p => p.Db.Quantity);
-            WriteNumber("Price", "nRealSellingPrice", p => p.Xml.RealPrice, p => p.Db.Price);
-            WriteNumber("Price", "nStandardSellingPrice", p => p.Xml.StandardPrice, p => p.Db.Price);
-            WriteNumber("Activated", "Enabled", p => p.Xml.Enabled, p => p.Db.Activated);
-            WriteNumber("Activated", "bActive", p => p.Xml.BActive, p => p.Db.Activated);
-            WriteString("ItemName", "Name", p => p.Xml.Name);
-            WriteString("ItemName", "CashName", p => p.Xml.CashName);
-            WriteString("ItemName", "ItemList.Name", p => p.Xml.ItemListName);
-            WriteNumber("Id", "physical flattened row", p => p.Xml.PhysicalId, p => p.Db.Id);
-
-            void WriteNumber(string dbField, string candidate, Func<(CashShopXmlDbRow Xml, CashShopDbRow Db), int> a, Func<(CashShopXmlDbRow Xml, CashShopDbRow Db), int> b)
-            {
-                int exact = pairs.Count(p => a(p) == b(p));
-                double pct = pairs.Count == 0 ? 0 : exact * 100.0 / pairs.Count;
-                w.WriteLine($"{Csv(dbField)},{Csv(candidate)},{pairs.Count},{exact},{pct.ToString("0.000", CultureInfo.InvariantCulture)}");
-            }
-
-            void WriteString(string dbField, string candidate, Func<(CashShopXmlDbRow Xml, CashShopDbRow Db), string> a)
-            {
-                int exact = pairs.Count(p => string.Equals(a(p), p.Db.ItemName, StringComparison.Ordinal));
-                double pct = pairs.Count == 0 ? 0 : exact * 100.0 / pairs.Count;
-                w.WriteLine($"{Csv(dbField)},{Csv(candidate)},{pairs.Count},{exact},{pct.ToString("0.000", CultureInfo.InvariantCulture)}");
-            }
+            Num("Quanty","First CashItems.Amount",p=>p.Xml.Amount,p=>p.Db.Quantity);
+            Num("Quanty","nDispCount",p=>p.Xml.DisplayCount,p=>p.Db.Quantity);
+            Num("Price","nRealSellingPrice",p=>p.Xml.RealPrice,p=>p.Db.Price);
+            Num("Price","nStandardSellingPrice",p=>p.Xml.StandardPrice,p=>p.Db.Price);
+            Num("Activated","Enabled",p=>p.Xml.Enabled,p=>p.Db.Activated);
+            Num("Activated","bActive",p=>p.Xml.BActive,p=>p.Db.Activated);
+            Str("ItemName","Name (remove apostrophe only)",p=>p.Xml.Name);
+            Str("ItemName","CashName",p=>p.Xml.CashName);
+            Str("ItemName","ItemList.Name",p=>p.Xml.ItemListName);
+            Num("Id","physical CASHINFO order",p=>p.Xml.PhysicalId,p=>p.Db.Id);
+            void Num(string f,string c,Func<(CashShopXmlDbRow Xml,CashShopDbRow Db),int>a,Func<(CashShopXmlDbRow Xml,CashShopDbRow Db),int>b){int e=pairs.Count(p=>a(p)==b(p));w.WriteLine($"{Csv(f)},{Csv(c)},{pairs.Count},{e},{(pairs.Count==0?0:e*100.0/pairs.Count).ToString("0.000",CultureInfo.InvariantCulture)}");}
+            void Str(string f,string c,Func<(CashShopXmlDbRow Xml,CashShopDbRow Db),string>a){int e=pairs.Count(p=>a(p)==p.Db.ItemName);w.WriteLine($"{Csv(f)},{Csv(c)},{pairs.Count},{e},{(pairs.Count==0?0:e*100.0/pairs.Count).ToString("0.000",CultureInfo.InvariantCulture)}");}
         }
 
         private static void WriteRaw(string folder, List<(CashShopXmlDbRow Xml, CashShopDbRow Db)> pairs)
         {
-            string path = Path.Combine(folder, "CashShop_RawComparison.csv");
-            using var w = new StreamWriter(path, false, new UTF8Encoding(true));
-            w.WriteLine("DB_Id,DB_Unique_Id,XML_Unique_Id,DB_Item_Id,XML_Item_Id,DB_Quanty,XML_Amount,XML_nDispCount,DB_Price,XML_RealPrice,XML_StandardPrice,DB_Activated,XML_Enabled,XML_bActive,DB_ItemName,XML_Name,XML_CashName,XML_ItemListName,DB_CashShopId,XML_CashShopId,XML_File");
-            foreach (var p in pairs)
-            {
-                w.WriteLine(string.Join(",", new[]
-                {
-                    p.Db.Id.ToString(CultureInfo.InvariantCulture), p.Db.UniqueId.ToString(CultureInfo.InvariantCulture), p.Xml.UniqueId.ToString(CultureInfo.InvariantCulture),
-                    p.Db.ItemId.ToString(CultureInfo.InvariantCulture), p.Xml.ItemId.ToString(CultureInfo.InvariantCulture), p.Db.Quantity.ToString(CultureInfo.InvariantCulture),
-                    p.Xml.Amount.ToString(CultureInfo.InvariantCulture), p.Xml.DisplayCount.ToString(CultureInfo.InvariantCulture), p.Db.Price.ToString(CultureInfo.InvariantCulture),
-                    p.Xml.RealPrice.ToString(CultureInfo.InvariantCulture), p.Xml.StandardPrice.ToString(CultureInfo.InvariantCulture), p.Db.Activated.ToString(CultureInfo.InvariantCulture),
-                    p.Xml.Enabled.ToString(CultureInfo.InvariantCulture), p.Xml.BActive.ToString(CultureInfo.InvariantCulture), Csv(p.Db.ItemName), Csv(p.Xml.Name), Csv(p.Xml.CashName), Csv(p.Xml.ItemListName),
-                    p.Db.CashShopId.ToString(CultureInfo.InvariantCulture), p.Xml.CashShopId.ToString(CultureInfo.InvariantCulture), Csv(p.Xml.FilePath)
-                }));
-            }
+            string path=Path.Combine(folder,"CashShop_RawComparison.csv");
+            using var w=new StreamWriter(path,false,new UTF8Encoding(true));
+            w.WriteLine("DB_Id,DB_Unique_Id,XML_Unique_Id,DB_Item_Id,XML_FirstItem_Id,DB_Quanty,XML_FirstAmount,XML_nDispCount,DB_Price,XML_RealPrice,XML_StandardPrice,DB_Activated,XML_Enabled,XML_bActive,DB_ItemName,XML_DBItemName,XML_ItemListName,XML_CashItemCount,DB_CashShopId,XML_CashShopId,XML_File");
+            foreach(var p in pairs) w.WriteLine(string.Join(",",new[]{p.Db.Id.ToString(),p.Db.UniqueId.ToString(),p.Xml.UniqueId.ToString(),p.Db.ItemId.ToString(),p.Xml.ItemId.ToString(),p.Db.Quantity.ToString(),p.Xml.Amount.ToString(),p.Xml.DisplayCount.ToString(),p.Db.Price.ToString(),p.Xml.RealPrice.ToString(),p.Xml.StandardPrice.ToString(),p.Db.Activated.ToString(),p.Xml.Enabled.ToString(),p.Xml.BActive.ToString(),Csv(p.Db.ItemName),Csv(p.Xml.Name),Csv(p.Xml.ItemListName),p.Xml.CashItemCount.ToString(),p.Db.CashShopId.ToString(),p.Xml.CashShopId.ToString(),Csv(p.Xml.FilePath)}));
         }
 
-        private static string WriteHighSignal(string folder, int containers, int options, List<CashShopXmlDbRow> xml, List<CashShopDbRow> db, List<(CashShopXmlDbRow Xml, CashShopDbRow Db)> pairs, CashShopDatabaseMapping mapping)
+        private static string WriteHighSignal(string folder,int containers,int options,List<CashShopXmlDbRow> xml,List<CashShopDbRow> db,List<(CashShopXmlDbRow Xml,CashShopDbRow Db)> pairs,CashShopDatabaseMapping m)
         {
-            string path = Path.Combine(folder, "HIGH_SIGNAL_REPORT.txt");
-            var sb = new StringBuilder();
-            sb.AppendLine("CASH SHOP XML <-> DATABASE HIGH SIGNAL REPORT");
-            sb.AppendLine("READ-ONLY");
-            sb.AppendLine();
+            string path=Path.Combine(folder,"HIGH_SIGNAL_REPORT.txt");
+            var sb=new StringBuilder();
+            sb.AppendLine("CASH SHOP XML <-> DATABASE HIGH SIGNAL REPORT"); sb.AppendLine("READ-ONLY"); sb.AppendLine();
             sb.AppendLine($"Canonical CashShopInformationCount groups : {containers:N0}");
             sb.AppendLine($"CASHINFO purchase options                : {options:N0}");
-            sb.AppendLine($"Flattened XML item rows                  : {xml.Count:N0}");
+            sb.AppendLine($"DB-shaped XML rows (1 per CASHINFO)      : {xml.Count:N0}");
             sb.AppendLine($"Asset.CashShop rows                      : {db.Count:N0}");
-            sb.AppendLine($"Matched composite-key rows               : {pairs.Count:N0}");
-            sb.AppendLine();
-            sb.AppendLine("STRUCTURAL CANDIDATES");
-            sb.AppendLine("Unique_Id  <- CASHINFO.unique_id");
-            sb.AppendLine("Item_Id    <- CashItems/Item/ItemId");
+            sb.AppendLine($"Matched rows                             : {pairs.Count:N0}"); sb.AppendLine();
+            sb.AppendLine("CONFIRMED STRUCTURE");
+            sb.AppendLine("One Asset.CashShop row per CASHINFO purchase option.");
+            sb.AppendLine("Item_Id    <- FIRST valid CashItems/Item/ItemId");
+            sb.AppendLine("Quanty     <- FIRST valid CashItems/Item/Amount");
+            sb.AppendLine("Price      <- nRealSellingPrice");
+            sb.AppendLine("Activated  <- Enabled");
+            sb.AppendLine("ItemName   <- Name, preserving literal \\n and removing apostrophe only");
             sb.AppendLine("CashShopId <- CashShopInformationCount/CashShopId");
-            sb.AppendLine($"Quanty     <- {mapping.QuantitySource}  [{mapping.QuantityMatchPercent:0.00}%]");
-            sb.AppendLine($"Price      <- {mapping.PriceSource}  [{mapping.PriceMatchPercent:0.00}%]");
-            sb.AppendLine($"Activated  <- {mapping.ActivatedSource}  [{mapping.ActivatedMatchPercent:0.00}%]");
-            sb.AppendLine($"ItemName   <- {mapping.ItemNameSource}  [{mapping.ItemNameMatchPercent:0.00}%]");
-            sb.AppendLine();
-            sb.AppendLine("IMPORTANT: one DB row is expected per CASHINFO x CashItems/Item relationship. Multiple price/quantity tiers remain separate rows because each CASHINFO has its own unique_id.");
-            File.WriteAllText(path, sb.ToString(), new UTF8Encoding(true));
-            return path;
+            sb.AppendLine("Unique_Id  <- CASHINFO.unique_id"); sb.AppendLine();
+            sb.AppendLine($"Quantity confidence  : {m.QuantityMatchPercent:0.00}%");
+            sb.AppendLine($"Price confidence     : {m.PriceMatchPercent:0.00}%");
+            sb.AppendLine($"Activated confidence : {m.ActivatedMatchPercent:0.00}%");
+            sb.AppendLine($"ItemName confidence  : {m.ItemNameMatchPercent:0.00}%");
+            sb.AppendLine(); sb.AppendLine("Package options can contain multiple CashItems. Only the first item is mirrored in Asset.CashShop; the complete package contents remain in XML.");
+            File.WriteAllText(path,sb.ToString(),new UTF8Encoding(true)); return path;
         }
 
-        private static string Csv(string? value)
-        {
-            string text = value ?? string.Empty;
-            if (text.Contains('"')) text = text.Replace("\"", "\"\"");
-            return text.IndexOfAny(new[] { ',', '"', '\r', '\n' }) >= 0 ? "\"" + text + "\"" : text;
-        }
+        private static string Csv(string? value){string t=value??string.Empty;if(t.Contains('"'))t=t.Replace("\"","\"\"");return t.IndexOfAny(new[]{',','"','\r','\n'})>=0?"\""+t+"\"":t;}
     }
 }
