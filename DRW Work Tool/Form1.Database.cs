@@ -828,6 +828,51 @@ namespace DRW_Work_Tool
                             folder);
             }
 
+            if (isDigimonCore)
+            {
+                importHost.Width = 390;
+                importHost.Padding = new Padding(10, 18, 18, 18);
+
+                button.Dock = DockStyle.Right;
+                button.Width = 190;
+
+                var compareButton =
+                    CreateEditorActionButton(
+                        "COMPARE DB");
+
+                compareButton.Name =
+                    "btnCompareSkillDatabase";
+
+                compareButton.Dock =
+                    DockStyle.Left;
+
+                compareButton.Width =
+                    150;
+
+                compareButton.Font =
+                    new Font(
+                        "Segoe UI Semibold",
+                        8.5F,
+                        FontStyle.Bold);
+
+                compareButton.FlatAppearance.BorderColor =
+                    Color.FromArgb(
+                        85,
+                        120,
+                        155);
+
+                editorToolTip.SetToolTip(
+                    compareButton,
+                    "READ-ONLY: compara Skill.xml + Digimon_List.xml com SkillInfo, SkillCode, SkillCodeApply e DigimonSkill da database atual. Não altera nenhuma tabela.");
+
+                compareButton.Click +=
+                    async (_, _) =>
+                        await OpenSkillDatabaseDiagnosticTabAndRunAsync();
+
+                importHost.Controls.Add(
+                    compareButton);
+            }
+
             importHost.Controls.Add(
                 button);
 
