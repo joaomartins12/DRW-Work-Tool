@@ -18,108 +18,63 @@ namespace DRW_Work_Tool.Core
         public int NpcIcons { get; internal set; }
         public int InvalidDirectIconDimensions { get; internal set; }
 
-        public int TotalDirectIcons =>
-            DigimonIcons +
-            TamerIcons +
-            NpcIcons;
+        public int TotalDirectIcons => DigimonIcons + TamerIcons + NpcIcons;
     }
 
     public static class ImageDatabaseIndexBuilder
     {
-        private static readonly string[] ImageExtensions =
-        {
-            ".bmp",
-            ".tga",
-            ".dds"
-        };
+        private static readonly string[] ImageExtensions = { ".bmp", ".tga", ".dds" };
 
         public static ImageDatabaseSyncResult Synchronize(
             string? databaseRoot = null,
             IProgress<string>? progress = null)
         {
-            string root =
-                string.IsNullOrWhiteSpace(databaseRoot)
-                    ? Path.Combine(AppContext.BaseDirectory, "ImgDatabase")
-                    : Path.GetFullPath(databaseRoot);
+            string root = string.IsNullOrWhiteSpace(databaseRoot)
+                ? Path.Combine(AppContext.BaseDirectory, "ImgDatabase")
+                : Path.GetFullPath(databaseRoot);
 
             if (!Directory.Exists(root))
             {
                 throw new DirectoryNotFoundException(
-                    $"A ImgDatabase ainda não existe: {root}. " +
-                    "Executa primeiro IMAGE DATABASE.");
+                    $"A ImgDatabase ainda não existe: {root}. Executa primeiro IMAGE DATABASE.");
             }
 
             progress?.Report("Synchronize: a verificar folders da ImgDatabase...");
 
-            var result = new ImageDatabaseSyncResult
-            {
-                DatabaseRoot = root
-            };
+            var result = new ImageDatabaseSyncResult { DatabaseRoot = root };
+            result.FoldersScanned = Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories).Count();
 
-            foreach (string folder in
-                     Directory.EnumerateDirectories(
-                         root,
-                         "*",
-                         SearchOption.AllDirectories))
-            {
-                result.FoldersScanned++;
-            }
-
-            progress?.Report("Synchronize: a ler dimensões dos ficheiros...");
-
+            progress?.Report("Synchronize: a ler dimensões e geometria real dos atlases...");
             ImageDatabaseIndexDocument document = Rebuild(root);
 
             result.InterfaceAtlases = document.InterfaceAtlases.Count;
-            result.SkillAtlases =
-                document.InterfaceAtlases.Count(
-                    x => x.Kind.Equals(
-                        "SkillAtlas",
-                        StringComparison.OrdinalIgnoreCase));
-
-            result.AtlasVariants =
-                document.InterfaceAtlases.Sum(x => x.Files.Count);
-
+            result.SkillAtlases = document.InterfaceAtlases.Count(x =>
+                x.Kind.Equals("SkillAtlas", StringComparison.OrdinalIgnoreCase));
+            result.AtlasVariants = document.InterfaceAtlases.Sum(x => x.Files.Count);
             result.DigimonIcons = document.DigimonIcons.Count;
             result.TamerIcons = document.TamerIcons.Count;
             result.NpcIcons = document.NpcIcons.Count;
-
             result.InvalidDirectIconDimensions =
                 document.DigimonIcons.Count(x => !x.IsExpected32x32) +
                 document.TamerIcons.Count(x => !x.IsExpected32x32);
 
-            string[] imageExtensions =
-            {
-                ".bmp",
-                ".tga",
-                ".dds"
-            };
-
-            result.FilesScanned =
-                Directory
-                    .EnumerateFiles(root, "*", SearchOption.AllDirectories)
-                    .Count(
-                        x => imageExtensions.Contains(
-                            Path.GetExtension(x),
-                            StringComparer.OrdinalIgnoreCase));
+            result.FilesScanned = Directory
+                .EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                .Count(IsSupportedImage);
 
             progress?.Report(
-                $"Synchronize concluído: " +
-                $"Atlases={result.InterfaceAtlases:N0}, " +
-                $"SkillAtlases={result.SkillAtlases:N0}, " +
-                $"Digimon={result.DigimonIcons:N0}, " +
-                $"Tamer={result.TamerIcons:N0}, " +
-                $"NPC={result.NpcIcons:N0}.");
+                $"Synchronize concluído: Atlases={result.InterfaceAtlases:N0}, " +
+                $"SkillAtlases={result.SkillAtlases:N0}, Digimon={result.DigimonIcons:N0}, " +
+                $"Tamer={result.TamerIcons:N0}, NPC={result.NpcIcons:N0}.");
 
             return result;
         }
 
-        public static ImageDatabaseIndexDocument Rebuild(
-            string? databaseRoot = null)
+        public static ImageDatabaseIndexDocument Rebuild(string? databaseRoot = null)
         {
-            string root =
-                string.IsNullOrWhiteSpace(databaseRoot)
-                    ? Path.Combine(AppContext.BaseDirectory, "ImgDatabase")
-                    : Path.GetFullPath(databaseRoot);
+            string root = string.IsNullOrWhiteSpace(databaseRoot)
+                ? Path.Combine(AppContext.BaseDirectory, "ImgDatabase")
+                : Path.GetFullPath(databaseRoot);
 
             Directory.CreateDirectory(root);
 
@@ -133,17 +88,11 @@ namespace DRW_Work_Tool.Core
                 NpcIcons = BuildDirectIcons(root, "Npc")
             };
 
-            string output = Path.Combine(root, "ImageDatabase.json");
-            ImageDatabaseIndexService.Serialize(output, document);
+            ImageDatabaseIndexService.Serialize(Path.Combine(root, "ImageDatabase.json"), document);
 
             string mapPath = Path.Combine(root, "InterfaceIconMap.json");
-
             if (!File.Exists(mapPath))
-            {
-                ImageDatabaseIndexService.Serialize(
-                    mapPath,
-                    new InterfaceIconMapDocument());
-            }
+                ImageDatabaseIndexService.Serialize(mapPath, new InterfaceIconMapDocument());
 
             return document;
         }
@@ -151,36 +100,34 @@ namespace DRW_Work_Tool.Core
         private static List<InterfaceAtlasEntry> BuildInterfaceAtlases(string root)
         {
             string folder = Path.Combine(root, "interface", "icon");
-
             if (!Directory.Exists(folder))
                 return new List<InterfaceAtlasEntry>();
 
-            List<string> files =
-                Directory
-                    .EnumerateFiles(folder, "*", SearchOption.AllDirectories)
-                    .Where(IsSupportedImage)
-                    .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
+            List<string> files = Directory
+                .EnumerateFiles(folder, "*", SearchOption.AllDirectories)
+                .Where(IsSupportedImage)
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
             var result = new List<InterfaceAtlasEntry>();
 
-            foreach (IGrouping<string, string> group in
-                     files.GroupBy(
+            foreach (IGrouping<string, string> group in files.GroupBy(
                          x => Path.GetFileNameWithoutExtension(x),
                          StringComparer.OrdinalIgnoreCase))
             {
                 List<string> variants = group.ToList();
 
-                string preferred =
-                    variants.FirstOrDefault(
-                        x => Path.GetExtension(x).Equals(
-                            ".bmp",
-                            StringComparison.OrdinalIgnoreCase))
-                    ?? variants.FirstOrDefault(
-                        x => Path.GetExtension(x).Equals(
-                            ".tga",
-                            StringComparison.OrdinalIgnoreCase))
-                    ?? variants.First();
+                // For CashShop we prefer the TGA guide when available because it contains
+                // the original ID markers. For normal atlases retain the old BMP > TGA > DDS order.
+                bool isCashShop = group.Key.StartsWith("cashshop", StringComparison.OrdinalIgnoreCase);
+
+                string preferred = isCashShop
+                    ? variants.FirstOrDefault(x => Path.GetExtension(x).Equals(".tga", StringComparison.OrdinalIgnoreCase))
+                      ?? variants.FirstOrDefault(x => Path.GetExtension(x).Equals(".dds", StringComparison.OrdinalIgnoreCase))
+                      ?? variants.First()
+                    : variants.FirstOrDefault(x => Path.GetExtension(x).Equals(".bmp", StringComparison.OrdinalIgnoreCase))
+                      ?? variants.FirstOrDefault(x => Path.GetExtension(x).Equals(".tga", StringComparison.OrdinalIgnoreCase))
+                      ?? variants.First();
 
                 if (!TryReadDimensions(preferred, out int width, out int height))
                 {
@@ -194,83 +141,84 @@ namespace DRW_Work_Tool.Core
                     }
                 }
 
-                int columns = width > 0 ? width / 32 : 0;
-                int rows = height > 0 ? height / 32 : 0;
+                int tileWidth;
+                int tileHeight;
+                int columns;
+                int rows;
 
-                result.Add(
-                    new InterfaceAtlasEntry
-                    {
-                        Name = group.Key,
-                        Width = width,
-                        Height = height,
-                        TileWidth = 32,
-                        TileHeight = 32,
-                        Columns = columns,
-                        Rows = rows,
-                        Capacity = columns * rows,
-                        Kind =
-                            group.Key.StartsWith(
-                                "sicon",
-                                StringComparison.OrdinalIgnoreCase)
-                                ? "SkillAtlas"
-                                : "InterfaceAtlas",
-                        PreferredPreviewPath = Relative(root, preferred),
-                        Files = variants
-                            .Select(x => Relative(root, x))
-                            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-                            .ToList()
-                    });
+                if (isCashShop)
+                {
+                    // VERIFIED AGAINST ORIGINAL cashshop*.tga GUIDE ATLASES.
+                    // All supplied CashShop atlases are 480x480 and contain 36 cells.
+                    // The yellow guide IDs demonstrate sequential row-major addressing:
+                    // suffix 00 -> slot 0, 10 -> slot 10, 20 -> slot 20, 30 -> slot 30.
+                    tileWidth = 80;
+                    tileHeight = 80;
+                    columns = width > 0 ? width / tileWidth : 0;
+                    rows = height > 0 ? height / tileHeight : 0;
+                }
+                else
+                {
+                    tileWidth = 32;
+                    tileHeight = 32;
+                    columns = width > 0 ? width / tileWidth : 0;
+                    rows = height > 0 ? height / tileHeight : 0;
+                }
+
+                result.Add(new InterfaceAtlasEntry
+                {
+                    Name = group.Key,
+                    Width = width,
+                    Height = height,
+                    TileWidth = tileWidth,
+                    TileHeight = tileHeight,
+                    Columns = columns,
+                    Rows = rows,
+                    Capacity = columns * rows,
+                    Kind = group.Key.StartsWith("sicon", StringComparison.OrdinalIgnoreCase)
+                        ? "SkillAtlas"
+                        : "InterfaceAtlas",
+                    PreferredPreviewPath = Relative(root, preferred),
+                    Files = variants
+                        .Select(x => Relative(root, x))
+                        .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                        .ToList()
+                });
             }
 
-            return result
-                .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            return result.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
-        private static List<DirectImageEntry> BuildDirectIcons(
-            string root,
-            string category)
+        private static List<DirectImageEntry> BuildDirectIcons(string root, string category)
         {
             string folder = Path.Combine(root, category);
-
             if (!Directory.Exists(folder))
                 return new List<DirectImageEntry>();
 
             var result = new List<DirectImageEntry>();
 
-            foreach (string file in
-                     Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
+            foreach (string file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
             {
                 if (!IsSupportedImage(file))
                     continue;
 
                 string id = Path.GetFileNameWithoutExtension(file);
-
                 if (string.IsNullOrWhiteSpace(id) || !id.All(char.IsDigit))
                     continue;
 
-                string containingFolder =
-                    Path.GetFileName(
-                        Path.GetDirectoryName(file) ?? string.Empty);
+                string containingFolder = Path.GetFileName(Path.GetDirectoryName(file) ?? string.Empty);
+                TryReadDimensions(file, out int width, out int height);
 
-                TryReadDimensions(
-                    file,
-                    out int width,
-                    out int height);
-
-                result.Add(
-                    new DirectImageEntry
-                    {
-                        Id = id,
-                        FolderName = containingFolder,
-                        RelativePath = Relative(root, file),
-                        Extension = Path.GetExtension(file),
-                        Width = width,
-                        Height = height,
-                        IsExpected32x32 =
-                            width == 32 &&
-                            height == 32
-                    });
+                result.Add(new DirectImageEntry
+                {
+                    Id = id,
+                    FolderName = containingFolder,
+                    RelativePath = Relative(root, file),
+                    Extension = Path.GetExtension(file),
+                    Width = width,
+                    Height = height,
+                    IsExpected32x32 = width == 32 && height == 32
+                });
             }
 
             return result
@@ -279,10 +227,7 @@ namespace DRW_Work_Tool.Core
                 .ToList();
         }
 
-        public static bool TryReadDimensions(
-            string path,
-            out int width,
-            out int height)
+        public static bool TryReadDimensions(string path, out int width, out int height)
         {
             width = 0;
             height = 0;
@@ -290,13 +235,10 @@ namespace DRW_Work_Tool.Core
             try
             {
                 string extension = Path.GetExtension(path);
-
                 if (extension.Equals(".bmp", StringComparison.OrdinalIgnoreCase))
                     return ReadBmp(path, out width, out height);
-
                 if (extension.Equals(".tga", StringComparison.OrdinalIgnoreCase))
                     return ReadTga(path, out width, out height);
-
                 if (extension.Equals(".dds", StringComparison.OrdinalIgnoreCase))
                     return ReadDds(path, out width, out height);
             }
@@ -309,92 +251,61 @@ namespace DRW_Work_Tool.Core
             return false;
         }
 
-        private static bool ReadBmp(
-            string path,
-            out int width,
-            out int height)
+        private static bool ReadBmp(string path, out int width, out int height)
         {
             width = 0;
             height = 0;
-
             using FileStream fs = File.OpenRead(path);
             using BinaryReader br = new(fs);
-
             if (fs.Length < 26 || br.ReadUInt16() != 0x4D42)
                 return false;
-
             fs.Position = 18;
             width = Math.Abs(br.ReadInt32());
             height = Math.Abs(br.ReadInt32());
-
             return width > 0 && height > 0;
         }
 
-        private static bool ReadTga(
-            string path,
-            out int width,
-            out int height)
+        private static bool ReadTga(string path, out int width, out int height)
         {
             width = 0;
             height = 0;
-
             using FileStream fs = File.OpenRead(path);
             using BinaryReader br = new(fs);
-
             if (fs.Length < 18)
                 return false;
-
             fs.Position = 12;
             width = br.ReadUInt16();
             height = br.ReadUInt16();
-
             return width > 0 && height > 0;
         }
 
-        private static bool ReadDds(
-            string path,
-            out int width,
-            out int height)
+        private static bool ReadDds(string path, out int width, out int height)
         {
             width = 0;
             height = 0;
-
             using FileStream fs = File.OpenRead(path);
             using BinaryReader br = new(fs);
-
             if (fs.Length < 20)
                 return false;
 
             byte[] magic = br.ReadBytes(4);
-
-            if (magic.Length != 4 ||
-                magic[0] != (byte)'D' ||
-                magic[1] != (byte)'D' ||
-                magic[2] != (byte)'S' ||
-                magic[3] != (byte)' ')
-            {
+            if (magic.Length != 4 || magic[0] != (byte)'D' || magic[1] != (byte)'D' ||
+                magic[2] != (byte)'S' || magic[3] != (byte)' ')
                 return false;
-            }
 
             fs.Position = 12;
             height = checked((int)br.ReadUInt32());
             width = checked((int)br.ReadUInt32());
-
             return width > 0 && height > 0;
         }
 
         private static bool IsSupportedImage(string path) =>
-            ImageExtensions.Contains(
-                Path.GetExtension(path),
-                StringComparer.OrdinalIgnoreCase);
+            ImageExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
 
         private static string Relative(string root, string path) =>
-            Path.GetRelativePath(root, path)
-                .Replace(Path.DirectorySeparatorChar, '/');
+            Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
 
         private static ulong ParseSortableId(string id) =>
-            ulong.TryParse(id, out ulong value)
-                ? value
-                : ulong.MaxValue;
+            ulong.TryParse(id, out ulong value) ? value : ulong.MaxValue;
     }
 }
