@@ -3,6 +3,7 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Xml.Linq;
 
@@ -93,8 +94,8 @@ namespace DRW_Work_Tool
 
                 if (page.Tag is AchievementBrowseState browseState)
                 {
-                    EnsureAchievementSiconBinding(browseState);
-                    ApplyVisibleAchievementSiconPreviews(browseState);
+                    EnsureAchievementIconBinding(browseState);
+                    ApplyVisibleAchievementIconPreviews(browseState);
                     continue;
                 }
 
@@ -130,9 +131,10 @@ namespace DRW_Work_Tool
 
             editorToolTip.SetToolTip(
                 open,
-                "Open Achieve.xml directly in the visual Achievement / Title Editor.");
+                "Open Achieve.xml in the visual Achievement / Title Editor. " +
+                "The loading screen remains visible until Achieve.xml, Quest.xml, Buff.xml and the title icon atlases are ready.");
 
-            open.Click += (_, _) =>
+            open.Click += async (_, _) =>
             {
                 string path = Path.Combine(
                     AppPaths.Xml,
@@ -163,10 +165,7 @@ namespace DRW_Work_Tool
                 }
 
                 StartAchievementStateTimer();
-
-                // Delay one message-loop turn so the entity page can repaint
-                // before the loading tab becomes active.
-                BeginInvoke(new Action(() => OpenAchievementBrowser(path)));
+                await OpenPreparedAchievementBrowserAsync(path);
             };
 
             parent.Controls.Remove(oldOpen);
@@ -175,9 +174,78 @@ namespace DRW_Work_Tool
             open.BringToFront();
         }
 
-        private void EnsureAchievementSiconBinding(AchievementBrowseState state)
+        private async Task OpenPreparedAchievementBrowserAsync(string xmlPath)
         {
-            const string marker = "AchievementSiconBinding";
+            string full = Path.GetFullPath(xmlPath);
+
+            var page = CreateDarkTab("Achieve.xml");
+            page.Name = full;
+
+            var loading = new EditorLoadingView(
+                "Loading Achievement / Title Editor",
+                "Loading Achieve.xml, Quest.xml, Buff.xml and title icons from achieve_icon.dds, achieve_icon_02.dds and achieve_icon_03.dds...");
+
+            page.Controls.Add(loading);
+            editorTabs.TabPages.Add(page);
+            editorTabs.SelectedTab = page;
+
+            // Give WinForms enough time to perform an actual paint before the
+            // heavier XML/ImageDatabase work starts.
+            await Task.Delay(40);
+
+            try
+            {
+                AchievementService service = await Task.Run(() =>
+                {
+                    var loaded = new AchievementService(full);
+
+                    // Warm the title icon mappings while the loading view is still
+                    // visible. Category Achieve resolves the three achieve_icon atlases.
+                    foreach (uint iconId in loaded.Records
+                        .Select(x => UInt(x, "s_nIcon"))
+                        .Where(x => x > 0)
+                        .Distinct())
+                    {
+                        using Bitmap? preview =
+                            ImageDatabasePreview.TryLoadInterfaceIcon(iconId, "Achieve");
+                    }
+
+                    return loaded;
+                });
+
+                if (page.IsDisposed)
+                    return;
+
+                BuildAchievementBrowser(page, service);
+
+                // Let card layout complete before applying visible previews.
+                await Task.Yield();
+
+                if (!page.IsDisposed && page.Tag is AchievementBrowseState state)
+                {
+                    EnsureAchievementIconBinding(state);
+                    ApplyVisibleAchievementIconPreviews(state);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (page.IsDisposed)
+                    return;
+
+                page.Controls.Clear();
+                page.Controls.Add(CreateInfoLabel(
+                    "Achieve.xml could not be loaded.\r\n\r\n" + ex.Message));
+
+                AppLogger.ErrorDetailed(
+                    "Achievement Editor",
+                    ex.Message,
+                    "Verify Achieve.xml, Quest.xml, Buff.xml and achieve_icon atlas mappings in ImgDatabase.");
+            }
+        }
+
+        private void EnsureAchievementIconBinding(AchievementBrowseState state)
+        {
+            const string marker = "AchievementIconBinding";
 
             if (state.Results.Tag is string tag && tag == marker)
                 return;
@@ -186,18 +254,18 @@ namespace DRW_Work_Tool
 
             state.Results.Scroll += (_, _) =>
                 BeginInvoke(new Action(() =>
-                    ApplyVisibleAchievementSiconPreviews(state)));
+                    ApplyVisibleAchievementIconPreviews(state)));
 
             state.Results.MouseWheel += (_, _) =>
                 BeginInvoke(new Action(() =>
-                    ApplyVisibleAchievementSiconPreviews(state)));
+                    ApplyVisibleAchievementIconPreviews(state)));
 
             state.Search.TextChanged += (_, _) =>
                 BeginInvoke(new Action(() =>
-                    ApplyVisibleAchievementSiconPreviews(state)));
+                    ApplyVisibleAchievementIconPreviews(state)));
         }
 
-        private void ApplyVisibleAchievementSiconPreviews(AchievementBrowseState state)
+        private void ApplyVisibleAchievementIconPreviews(AchievementBrowseState state)
         {
             if (state.Results.IsDisposed)
                 return;
@@ -232,16 +300,20 @@ namespace DRW_Work_Tool
 
                 uint iconId = UInt(node, "s_nIcon");
 
-                if (picture.Tag is uint loaded && loaded == iconId && picture.Image != null)
+                if (picture.Tag is uint loaded &&
+                    loaded == iconId &&
+                    picture.Image != null)
+                {
                     continue;
+                }
 
                 Image? previous = picture.Image;
 
-                // Title icons use the same sicon01-sicon07 family used by
-                // Skill/Buff previews, so resolve them through category Skill.
+                // Achievement/title icons are stored in achieve_icon.dds,
+                // achieve_icon_02.dds and achieve_icon_03.dds.
                 picture.Image = ImageDatabasePreview.TryLoadInterfaceIcon(
                     iconId,
-                    "Skill");
+                    "Achieve");
 
                 picture.Tag = iconId;
 
