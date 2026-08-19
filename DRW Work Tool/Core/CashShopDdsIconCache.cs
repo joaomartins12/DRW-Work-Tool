@@ -8,12 +8,20 @@ using System.Linq;
 namespace DRW_Work_Tool.Core
 {
     /// <summary>
-    /// Cash Shop icon loader that deliberately uses DDS atlas variants.
-    /// CashShop atlases are physically 15x15 (480x480), while nIconID uses
-    /// a logical 10x10 address in the final two digits (00..99).
+    /// Loads Cash Shop icons directly from cashshopG_PPP DDS atlases.
+    /// Verified from the original TGA guide atlases:
+    /// - atlas size: 480x480
+    /// - cell size: 80x80
+    /// - grid: 6 columns x 6 rows
+    /// - 36 sequential IDs per atlas (suffix 00..35)
     /// </summary>
     public static class CashShopDdsIconCache
     {
+        private const int CashShopTileSize = 80;
+        private const int CashShopColumns = 6;
+        private const int CashShopRows = 6;
+        private const int CashShopSlots = CashShopColumns * CashShopRows;
+
         private static readonly object Sync = new();
         private static ImageDatabaseIndexService? _database;
         private static readonly Dictionary<string, Bitmap> AtlasCache = new(StringComparer.OrdinalIgnoreCase);
@@ -32,26 +40,18 @@ namespace DRW_Work_Tool.Core
 
             try
             {
-                ImageDatabaseIndexService database = GetDatabase();
-                string normalized = iconId.ToString();
-
-                InterfaceIconMapEntry? mapping = database.InterfaceMap.Icons
-                    .Where(x => NormalizeId(x.Id) == normalized)
-                    .Where(x =>
-                        x.Category.Equals("CashShop", StringComparison.OrdinalIgnoreCase) ||
-                        x.Atlas.StartsWith("cashshop", StringComparison.OrdinalIgnoreCase))
-                    .OrderByDescending(x => x.Category.Equals("CashShop", StringComparison.OrdinalIgnoreCase))
-                    .FirstOrDefault();
-
-                if (mapping == null)
+                if (!TryResolveAtlasAndSlot(iconId, out string atlasName, out int slot))
                 {
                     Cache(iconId, null);
                     return null;
                 }
 
-                InterfaceAtlasEntry? atlas = database.GetAtlas(mapping.Atlas);
+                ImageDatabaseIndexService database = GetDatabase();
+                InterfaceAtlasEntry? atlas = database.GetAtlas(atlasName);
+
                 if (atlas == null)
                 {
+                    AppLogger.Warning($"Cash Shop atlas '{atlasName}' was not found for nIconID {iconId}.");
                     Cache(iconId, null);
                     return null;
                 }
@@ -64,48 +64,39 @@ namespace DRW_Work_Tool.Core
 
                 if (string.IsNullOrWhiteSpace(ddsPath))
                 {
+                    AppLogger.Warning($"Cash Shop DDS variant was not found for atlas '{atlasName}'.");
                     Cache(iconId, null);
                     return null;
                 }
 
                 Bitmap atlasBitmap = GetAtlas(ddsPath);
 
-                int sourceWidth = atlas.TileWidth > 0 ? atlas.TileWidth : mapping.Width;
-                int sourceHeight = atlas.TileHeight > 0 ? atlas.TileHeight : mapping.Height;
-                int sourceX = mapping.X;
-                int sourceY = mapping.Y;
-
-                // IMPORTANT:
-                // cashshopG_PPP.dds is 480x480 / 15x15 physically, but the CashShop ID
-                // namespace is GPPP00..GPPP99. Therefore the two trailing digits are a
-                // logical 10x10 slot, NOT a row-major index using atlas.Columns (15).
-                // Recalculate here so even an old InterfaceIconMap.json remains usable.
-                if (mapping.Category.Equals("CashShop", StringComparison.OrdinalIgnoreCase) ||
-                    mapping.Atlas.StartsWith("cashshop", StringComparison.OrdinalIgnoreCase))
-                {
-                    int logicalSlot = (int)(iconId % 100u);
-                    sourceX = (logicalSlot % 10) * sourceWidth;
-                    sourceY = (logicalSlot / 10) * sourceHeight;
-                }
-
-                var source = new Rectangle(sourceX, sourceY, sourceWidth, sourceHeight);
-
-                if (source.Width <= 0 ||
-                    source.Height <= 0 ||
-                    source.X < 0 ||
-                    source.Y < 0 ||
-                    source.Right > atlasBitmap.Width ||
-                    source.Bottom > atlasBitmap.Height)
+                if (atlasBitmap.Width != 480 || atlasBitmap.Height != 480)
                 {
                     AppLogger.Warning(
-                        $"Cash Shop DDS icon {iconId} has invalid source rectangle " +
-                        $"{source.X},{source.Y},{source.Width},{source.Height} in {mapping.Atlas} " +
-                        $"({atlasBitmap.Width}x{atlasBitmap.Height}).");
+                        $"Cash Shop atlas '{atlasName}' has unexpected dimensions " +
+                        $"{atlasBitmap.Width}x{atlasBitmap.Height}; expected 480x480.");
+                }
+
+                int column = slot % CashShopColumns;
+                int row = slot / CashShopColumns;
+                var source = new Rectangle(
+                    column * CashShopTileSize,
+                    row * CashShopTileSize,
+                    CashShopTileSize,
+                    CashShopTileSize);
+
+                if (source.Right > atlasBitmap.Width || source.Bottom > atlasBitmap.Height)
+                {
+                    AppLogger.Warning(
+                        $"Cash Shop nIconID {iconId} resolved outside '{atlasName}': " +
+                        $"slot={slot}, rect={source.X},{source.Y},{source.Width},{source.Height}, " +
+                        $"atlas={atlasBitmap.Width}x{atlasBitmap.Height}.");
                     Cache(iconId, null);
                     return null;
                 }
 
-                var icon = new Bitmap(source.Width, source.Height, PixelFormat.Format32bppArgb);
+                var icon = new Bitmap(CashShopTileSize, CashShopTileSize, PixelFormat.Format32bppArgb);
                 using (Graphics graphics = Graphics.FromImage(icon))
                 {
                     graphics.Clear(Color.Transparent);
@@ -125,6 +116,37 @@ namespace DRW_Work_Tool.Core
                 Cache(iconId, null);
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Converts an nIconID into its atlas name and physical slot.
+        /// Example: 210210 => cashshop2_102, slot 10.
+        /// Example: 510423 => cashshop5_104, slot 23.
+        /// </summary>
+        private static bool TryResolveAtlasAndSlot(uint iconId, out string atlasName, out int slot)
+        {
+            atlasName = string.Empty;
+            slot = (int)(iconId % 100u);
+
+            if (slot < 0 || slot >= CashShopSlots)
+                return false;
+
+            uint atlasCode = iconId / 100u;
+            string code = atlasCode.ToString();
+
+            // Current DMO Cash Shop atlases use one group digit plus a three-digit page:
+            // 2102 => group 2, page 102; 5104 => group 5, page 104.
+            if (code.Length < 4)
+                return false;
+
+            string group = code.Substring(0, code.Length - 3);
+            string page = code.Substring(code.Length - 3);
+
+            if (string.IsNullOrWhiteSpace(group) || string.IsNullOrWhiteSpace(page))
+                return false;
+
+            atlasName = $"cashshop{group}_{page}";
+            return true;
         }
 
         public static void Reset()
@@ -198,12 +220,6 @@ namespace DRW_Work_Tool.Core
             return Path.IsPathRooted(path)
                 ? Path.GetFullPath(path)
                 : Path.GetFullPath(Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar)));
-        }
-
-        private static string NormalizeId(string value)
-        {
-            value = (value ?? string.Empty).Trim();
-            return ulong.TryParse(value, out ulong numeric) ? numeric.ToString() : value;
         }
     }
 }
