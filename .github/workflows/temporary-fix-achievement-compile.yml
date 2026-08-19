@@ -1,0 +1,45 @@
+name: Fix Achievement Compile Errors
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch Achievement editor compile errors
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("DRW Work Tool/Form1.AchievementEditor.cs")
+          text = path.read_text(encoding="utf-8")
+
+          # uint sequence: DefaultIfEmpty must receive uint, not int.
+          text = text.replace(".DefaultIfEmpty(1499).Max()", ".DefaultIfEmpty(1499u).Max()")
+
+          # Form1 already inherits the Text property from Form. A helper named Text(...)
+          # in a partial Form1 shadows that property across all partial files and causes
+          # Form1.cs / Form1.Designer.cs to see Text as a method group.
+          text = text.replace("Text(", "AchievementText(")
+          text = text.replace("private static string AchievementText", "private static string AchievementText")
+
+          path.write_text(text, encoding="utf-8")
+
+      - name: Remove temporary workflow and commit
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "DRW Work Tool/Form1.AchievementEditor.cs"
+          git rm .github/workflows/temporary-fix-achievement-compile.yml
+          git commit -m "Fix Achievement editor compile errors"
+          git push origin master
