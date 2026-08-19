@@ -28,22 +28,6 @@ namespace DRW_Work_Tool.Core
         public string LogFile { get; init; } = string.Empty;
     }
 
-    /// <summary>
-    /// Imports the three core Digimon XML databases in this strict order:
-    ///
-    /// 1) Digimon_List.xml
-    /// 2) DigimonEvo.xml
-    /// 3) Skill.xml
-    ///
-    /// ALL THREE XML files are completely parsed and cross-validated before
-    /// any DELETE/INSERT is executed. Database changes then run inside ONE
-    /// SQL transaction, so a failure/cancel causes a complete rollback.
-    ///
-    /// EvolutionArmor is intentionally preserved. None of the three supplied
-    /// XML formats contains the ItemId/Chance/Amount triplets required by
-    /// Asset.EvolutionArmor, therefore synthesizing or deleting those 54 rows
-    /// would be destructive and unsupported by the source data.
-    /// </summary>
     public sealed class DigimonCoreDatabaseImportService
     {
         private const string DigimonBaseInfoTable =
@@ -109,17 +93,9 @@ namespace DRW_Work_Tool.Core
             Log("Ordem obrigatória: Digimon_List.xml -> DigimonEvo.xml -> Skill.xml.");
             Log("FASE 0/4 - validação completa antes de tocar na database.");
 
-            EnsureFile(
-                digimonListXml,
-                "Digimon_List.xml");
-
-            EnsureFile(
-                digimonEvoXml,
-                "DigimonEvo.xml");
-
-            EnsureFile(
-                skillXml,
-                "Skill.xml");
+            EnsureFile(digimonListXml, "Digimon_List.xml");
+            EnsureFile(digimonEvoXml, "DigimonEvo.xml");
+            EnsureFile(skillXml, "Skill.xml");
 
             PreparedImport prepared =
                 await Task.Run(
@@ -132,8 +108,7 @@ namespace DRW_Work_Tool.Core
                             cancellationToken),
                     cancellationToken);
 
-            Log(
-                "VALIDAÇÃO CONCLUÍDA. Nenhuma tabela foi alterada durante a validação.");
+            Log("VALIDAÇÃO CONCLUÍDA. Nenhuma tabela foi alterada durante a validação.");
 
             Log(
                 $"Resumo preparado: DigimonBaseInfo={prepared.Digimons.Count:N0}, " +
@@ -152,47 +127,32 @@ namespace DRW_Work_Tool.Core
                     "Skill IDs que não existem em Skill.xml. Essas referências não podem gerar " +
                     "SkillCode/SkillInfo e foram apenas reportadas.");
 
-                foreach (uint id in
-                         prepared.MissingSkillReferences
-                             .Take(30))
-                {
-                    Log(
-                        $"WARNING: Skill ID ausente em Skill.xml: {id}.");
-                }
+                foreach (uint id in prepared.MissingSkillReferences.Take(30))
+                    Log($"WARNING: Skill ID ausente em Skill.xml: {id}.");
 
                 if (prepared.MissingSkillReferences.Count > 30)
-                {
-                    Log(
-                        $"WARNING: ... e mais {prepared.MissingSkillReferences.Count - 30:N0} IDs.");
-                }
+                    Log($"WARNING: ... e mais {prepared.MissingSkillReferences.Count - 30:N0} IDs.");
             }
 
             Log("A validar ligação SQL Server...");
 
             await using var connection =
-                new SqlConnection(
-                    connectionString);
+                new SqlConnection(connectionString);
 
-            await connection.OpenAsync(
-                cancellationToken);
-
+            await connection.OpenAsync(cancellationToken);
             Log("Ligação SQL estabelecida.");
 
             await using (var xactAbort =
-                new SqlCommand(
-                    "SET XACT_ABORT ON;",
-                    connection))
+                new SqlCommand("SET XACT_ABORT ON;", connection))
             {
-                await xactAbort.ExecuteNonQueryAsync(
-                    cancellationToken);
+                await xactAbort.ExecuteNonQueryAsync(cancellationToken);
             }
 
             Log("SQL safety: SET XACT_ABORT ON ativo.");
 
             await using SqlTransaction transaction =
                 (SqlTransaction)
-                await connection.BeginTransactionAsync(
-                    cancellationToken);
+                await connection.BeginTransactionAsync(cancellationToken);
 
             try
             {
@@ -208,115 +168,71 @@ namespace DRW_Work_Tool.Core
                     "Tabelas core limpas + identity reseed concluído. " +
                     "EvolutionArmor foi preservada porque não é representada pelos três XMLs.");
 
-                // ---------------------------------------------------------
-                // 1) DIGIMON_LIST.XML
-                // ---------------------------------------------------------
                 Log("FASE 1/3 - Digimon_List.xml -> Asset.DigimonBaseInfo.");
-                Log(
-                    $"A importar {prepared.Digimons.Count:N0} DigimonBaseInfo rows...");
 
                 await BulkInsertAsync(
                     connection,
                     transaction,
                     DigimonBaseInfoTable,
-                    BuildDigimonBaseInfoTable(
-                        prepared.Digimons),
+                    BuildDigimonBaseInfoTable(prepared.Digimons),
                     cancellationToken);
 
-                Log(
-                    $"FASE 1/3 concluída: DigimonBaseInfo={prepared.Digimons.Count:N0}.");
+                Log($"FASE 1/3 concluída: DigimonBaseInfo={prepared.Digimons.Count:N0}.");
 
-                // ---------------------------------------------------------
-                // 2) DIGIMONEVO.XML
-                // ---------------------------------------------------------
-                Log(
-                    "FASE 2/3 - DigimonEvo.xml -> Evolution -> EvolutionLine -> EvolutionStage.");
+                Log("FASE 2/3 - DigimonEvo.xml -> Evolution -> EvolutionLine -> EvolutionStage.");
 
                 await BulkInsertAsync(
                     connection,
                     transaction,
                     EvolutionTable,
-                    BuildEvolutionTable(
-                        prepared.Evolutions),
+                    BuildEvolutionTable(prepared.Evolutions),
                     cancellationToken);
-
-                Log(
-                    $"Evolution concluído: {prepared.Evolutions.Count:N0} rows.");
 
                 await BulkInsertAsync(
                     connection,
                     transaction,
                     EvolutionLineTable,
-                    BuildEvolutionLineTable(
-                        prepared.EvolutionLines),
+                    BuildEvolutionLineTable(prepared.EvolutionLines),
                     cancellationToken);
-
-                Log(
-                    $"EvolutionLine concluído: {prepared.EvolutionLines.Count:N0} rows.");
 
                 await BulkInsertAsync(
                     connection,
                     transaction,
                     EvolutionStageTable,
-                    BuildEvolutionStageTable(
-                        prepared.EvolutionStages),
+                    BuildEvolutionStageTable(prepared.EvolutionStages),
                     cancellationToken);
 
-                Log(
-                    $"EvolutionStage concluído: {prepared.EvolutionStages.Count:N0} rows.");
+                Log("FASE 2/3 concluída. EvolutionArmor preservada.");
 
-                Log(
-                    "FASE 2/3 concluída. EvolutionArmor preservada (sem source equivalente nos XMLs fornecidos).");
-
-                // ---------------------------------------------------------
-                // 3) SKILL.XML
-                // ---------------------------------------------------------
-                Log(
-                    "FASE 3/3 - Skill.xml -> SkillCode -> SkillCodeApply -> SkillInfo -> DigimonSkill.");
+                Log("FASE 3/3 - Skill.xml -> SkillCode -> SkillCodeApply -> SkillInfo -> DigimonSkill.");
 
                 await BulkInsertAsync(
                     connection,
                     transaction,
                     SkillCodeTable,
-                    BuildSkillCodeTable(
-                        prepared.SkillCodes),
+                    BuildSkillCodeTable(prepared.SkillCodes),
                     cancellationToken);
-
-                Log(
-                    $"SkillCode concluído: {prepared.SkillCodes.Count:N0} rows.");
 
                 await BulkInsertAsync(
                     connection,
                     transaction,
                     SkillCodeApplyTable,
-                    BuildSkillCodeApplyTable(
-                        prepared.SkillApplies),
+                    BuildSkillCodeApplyTable(prepared.SkillApplies),
                     cancellationToken);
-
-                Log(
-                    $"SkillCodeApply concluído: {prepared.SkillApplies.Count:N0} rows.");
 
                 await BulkInsertAsync(
                     connection,
                     transaction,
                     SkillInfoTable,
-                    BuildSkillInfoTable(
-                        prepared.SkillInfos),
+                    BuildSkillInfoTable(prepared.SkillInfos),
                     cancellationToken);
-
-                Log(
-                    $"SkillInfo concluído: {prepared.SkillInfos.Count:N0} rows.");
 
                 await BulkInsertAsync(
                     connection,
                     transaction,
                     DigimonSkillTable,
-                    BuildDigimonSkillTable(
-                        prepared.DigimonSkills),
+                    BuildDigimonSkillTable(prepared.DigimonSkills),
                     cancellationToken);
-
-                Log(
-                    $"DigimonSkill concluído: {prepared.DigimonSkills.Count:N0} rows.");
 
                 await VerifyInsertedCountsAsync(
                     connection,
@@ -325,11 +241,9 @@ namespace DRW_Work_Tool.Core
                     Log,
                     cancellationToken);
 
-                await transaction.CommitAsync(
-                    cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
 
-                TimeSpan elapsed =
-                    DateTime.Now - started;
+                TimeSpan elapsed = DateTime.Now - started;
 
                 Log("COMMIT concluído com sucesso.");
                 Log(
@@ -345,28 +259,17 @@ namespace DRW_Work_Tool.Core
 
                 return new DigimonCoreDatabaseImportSummary
                 {
-                    DigimonBaseInfoRows =
-                        prepared.Digimons.Count,
-                    EvolutionRows =
-                        prepared.Evolutions.Count,
-                    EvolutionLineRows =
-                        prepared.EvolutionLines.Count,
-                    EvolutionStageRows =
-                        prepared.EvolutionStages.Count,
-                    SkillCodeRows =
-                        prepared.SkillCodes.Count,
-                    SkillCodeApplyRows =
-                        prepared.SkillApplies.Count,
-                    SkillInfoRows =
-                        prepared.SkillInfos.Count,
-                    DigimonSkillRows =
-                        prepared.DigimonSkills.Count,
-                    DuplicateSkillIdsCollapsed =
-                        prepared.DuplicateSkillIdsCollapsed,
-                    MissingSkillReferences =
-                        prepared.MissingSkillReferences.Count,
-                    SharedSkillAssociations =
-                        prepared.SharedSkillAssociations,
+                    DigimonBaseInfoRows = prepared.Digimons.Count,
+                    EvolutionRows = prepared.Evolutions.Count,
+                    EvolutionLineRows = prepared.EvolutionLines.Count,
+                    EvolutionStageRows = prepared.EvolutionStages.Count,
+                    SkillCodeRows = prepared.SkillCodes.Count,
+                    SkillCodeApplyRows = prepared.SkillApplies.Count,
+                    SkillInfoRows = prepared.SkillInfos.Count,
+                    DigimonSkillRows = prepared.DigimonSkills.Count,
+                    DuplicateSkillIdsCollapsed = prepared.DuplicateSkillIdsCollapsed,
+                    MissingSkillReferences = prepared.MissingSkillReferences.Count,
+                    SharedSkillAssociations = prepared.SharedSkillAssociations,
                     Elapsed = elapsed,
                     LogFile = logPath
                 };
@@ -375,33 +278,22 @@ namespace DRW_Work_Tool.Core
             {
                 try
                 {
-                    await transaction.RollbackAsync(
-                        CancellationToken.None);
-
-                    Log(
-                        "ROLLBACK concluído. A database voltou ao estado anterior ao import.");
+                    await transaction.RollbackAsync(CancellationToken.None);
+                    Log("ROLLBACK concluído. A database voltou ao estado anterior ao import.");
                 }
                 catch (Exception rollbackEx)
                 {
-                    Log(
-                        "ERRO durante ROLLBACK: " +
-                        rollbackEx.Message);
+                    Log("ERRO durante ROLLBACK: " + rollbackEx.Message);
 
                     try
                     {
-                        SqlConnection.ClearPool(
-                            connection);
-
+                        SqlConnection.ClearPool(connection);
                         await connection.CloseAsync();
-
-                        Log(
-                            "SQL safety: ligação fatal removida do pool e fechada fisicamente.");
+                        Log("SQL safety: ligação fatal removida do pool e fechada fisicamente.");
                     }
                     catch (Exception closeEx)
                     {
-                        Log(
-                            "WARNING: também não foi possível fechar/descartar a ligação após falha de rollback: " +
-                            closeEx.Message);
+                        Log("WARNING: também não foi possível fechar/descartar a ligação após falha de rollback: " + closeEx.Message);
                     }
                 }
 
@@ -417,10 +309,7 @@ namespace DRW_Work_Tool.Core
             CancellationToken cancellationToken)
         {
             log("A carregar Digimon_List.xml...");
-            XDocument digimonDocument =
-                XDocument.Load(
-                    digimonListXml,
-                    LoadOptions.None);
+            XDocument digimonDocument = XDocument.Load(digimonListXml, LoadOptions.None);
 
             List<DigimonBaseRow> digimons =
                 ReadDigimonList(
@@ -434,10 +323,7 @@ namespace DRW_Work_Tool.Core
                 $"{skillAssociations.Sum(x => x.Value.Count):N0} skill associations físicas.");
 
             log("A carregar DigimonEvo.xml...");
-            XDocument evoDocument =
-                XDocument.Load(
-                    digimonEvoXml,
-                    LoadOptions.None);
+            XDocument evoDocument = XDocument.Load(digimonEvoXml, LoadOptions.None);
 
             ReadDigimonEvo(
                 evoDocument,
@@ -454,10 +340,7 @@ namespace DRW_Work_Tool.Core
                 $"EvolutionStage={evolutionStages.Count:N0}.");
 
             log("A carregar Skill.xml...");
-            XDocument skillDocument =
-                XDocument.Load(
-                    skillXml,
-                    LoadOptions.None);
+            XDocument skillDocument = XDocument.Load(skillXml, LoadOptions.None);
 
             ReadSkills(
                 skillDocument,
@@ -479,8 +362,8 @@ namespace DRW_Work_Tool.Core
                 $"DigimonSkill={digimonSkills.Count:N0}.");
 
             log(
-                "SkillInfo CastingTime validado antes do SQL. " +
-                "O sentinel/anomalia 107479040 é normalizado para 0 apenas no import.");
+                "SkillInfo mapping restaurado a partir da DB funcional: " +
+                "Value=0, CastingTime=0 e MemoryChips=0; Type segue DigimonSkill.Type.");
 
             return new PreparedImport
             {
@@ -504,149 +387,76 @@ namespace DRW_Work_Tool.Core
             CancellationToken cancellationToken,
             out Dictionary<uint, List<SkillAssociation>> skillAssociations)
         {
-            XElement root =
-                document.Root ??
-                throw new InvalidDataException(
-                    "Digimon_List.xml não possui root.");
+            XElement root = document.Root ?? throw new InvalidDataException("Digimon_List.xml não possui root.");
 
-            if (!root.Name.LocalName.Equals(
-                    "DigimonList",
-                    StringComparison.Ordinal))
-            {
-                throw new InvalidDataException(
-                    $"Digimon_List.xml root inválido: <{root.Name.LocalName}>. Esperado <DigimonList>.");
-            }
+            if (!root.Name.LocalName.Equals("DigimonList", StringComparison.Ordinal))
+                throw new InvalidDataException($"Digimon_List.xml root inválido: <{root.Name.LocalName}>. Esperado <DigimonList>.");
 
-            string skillSlots =
-                root.Attribute("SkillSlots")?.Value
-                ?? string.Empty;
+            string skillSlots = root.Attribute("SkillSlots")?.Value ?? string.Empty;
 
-            if (skillSlots.Length != 0 &&
-                skillSlots != "5")
-            {
-                throw new InvalidDataException(
-                    $"Digimon_List.xml SkillSlots={skillSlots}. O importer foi preparado para exatamente 5 slots.");
-            }
+            if (skillSlots.Length != 0 && skillSlots != "5")
+                throw new InvalidDataException($"Digimon_List.xml SkillSlots={skillSlots}. O importer foi preparado para exatamente 5 slots.");
 
-            List<XElement> nodes =
-                root.Elements("Digimon")
-                    .ToList();
+            List<XElement> nodes = root.Elements("Digimon").ToList();
 
             if (nodes.Count == 0)
-            {
-                throw new InvalidDataException(
-                    "Digimon_List.xml não contém Digimon.");
-            }
+                throw new InvalidDataException("Digimon_List.xml não contém Digimon.");
 
-            var result =
-                new List<DigimonBaseRow>(
-                    nodes.Count);
-
-            skillAssociations =
-                new Dictionary<uint, List<SkillAssociation>>();
-
-            var seenIds =
-                new HashSet<uint>();
-
+            var result = new List<DigimonBaseRow>(nodes.Count);
+            skillAssociations = new Dictionary<uint, List<SkillAssociation>>();
+            var seenIds = new HashSet<uint>();
             int identity = 0;
 
             foreach (XElement node in nodes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                uint type =
-                    ReadUIntAttribute(
-                        node,
-                        "ID",
-                        "Digimon");
+                uint type = ReadUIntAttribute(node, "ID", "Digimon");
 
                 if (type == 0)
-                {
-                    throw new InvalidDataException(
-                        "Digimon_List.xml contém Digimon ID=0.");
-                }
+                    throw new InvalidDataException("Digimon_List.xml contém Digimon ID=0.");
 
                 if (!seenIds.Add(type))
-                {
-                    throw new InvalidDataException(
-                        $"Digimon_List.xml contém Digimon ID duplicado: {type}.");
-                }
+                    throw new InvalidDataException($"Digimon_List.xml contém Digimon ID duplicado: {type}.");
 
-                XElement stats =
-                    node.Element("Stats") ??
-                    throw new InvalidDataException(
-                        $"Digimon {type}: <Stats> ausente.");
+                XElement stats = node.Element("Stats") ?? throw new InvalidDataException($"Digimon {type}: <Stats> ausente.");
 
                 int[] families =
                     ReadCsvTriple(
-                        ReadText(
-                            node,
-                            "FamilyTypes",
-                            $"Digimon {type}"),
+                        ReadText(node, "FamilyTypes", $"Digimon {type}"),
                         $"Digimon {type} FamilyTypes");
 
                 List<XElement> skillNodes =
-                    node.Element("Skills")?
-                        .Elements("Skill")
-                        .ToList()
-                    ?? throw new InvalidDataException(
-                        $"Digimon {type}: <Skills> ausente.");
+                    node.Element("Skills")?.Elements("Skill").ToList()
+                    ?? throw new InvalidDataException($"Digimon {type}: <Skills> ausente.");
 
                 if (skillNodes.Count != 5)
-                {
-                    throw new InvalidDataException(
-                        $"Digimon {type}: esperado exatamente 5 <Skill>; encontrado {skillNodes.Count}.");
-                }
+                    throw new InvalidDataException($"Digimon {type}: esperado exatamente 5 <Skill>; encontrado {skillNodes.Count}.");
 
-                var seenSlots =
-                    new HashSet<int>();
+                var seenSlots = new HashSet<int>();
 
                 foreach (XElement skill in skillNodes)
                 {
-                    int slot =
-                        ReadIntAttribute(
-                            skill,
-                            "Slot",
-                            $"Digimon {type} Skill");
+                    int slot = ReadIntAttribute(skill, "Slot", $"Digimon {type} Skill");
 
-                    if (slot < 0 ||
-                        slot > 4)
-                    {
-                        throw new InvalidDataException(
-                            $"Digimon {type}: Skill Slot={slot} fora de 0..4.");
-                    }
+                    if (slot < 0 || slot > 4)
+                        throw new InvalidDataException($"Digimon {type}: Skill Slot={slot} fora de 0..4.");
 
                     if (!seenSlots.Add(slot))
-                    {
-                        throw new InvalidDataException(
-                            $"Digimon {type}: Skill Slot={slot} duplicado.");
-                    }
+                        throw new InvalidDataException($"Digimon {type}: Skill Slot={slot} duplicado.");
 
-                    uint skillId =
-                        ReadUIntAttribute(
-                            skill,
-                            "ID",
-                            $"Digimon {type} Skill Slot {slot}");
+                    uint skillId = ReadUIntAttribute(skill, "ID", $"Digimon {type} Skill Slot {slot}");
 
                     if (skillId == 0)
                         continue;
 
-                    if (!skillAssociations.TryGetValue(
-                            skillId,
-                            out List<SkillAssociation>? list))
+                    if (!skillAssociations.TryGetValue(skillId, out List<SkillAssociation>? list))
                     {
-                        list =
-                            new List<SkillAssociation>();
-
-                        skillAssociations.Add(
-                            skillId,
-                            list);
+                        list = new List<SkillAssociation>();
+                        skillAssociations.Add(skillId, list);
                     }
 
-                    if (!list.Any(
-                            x =>
-                                x.DigimonType == type &&
-                                x.Slot == slot))
+                    if (!list.Any(x => x.DigimonType == type && x.Slot == slot))
                     {
                         list.Add(
                             new SkillAssociation
@@ -663,102 +473,29 @@ namespace DRW_Work_Tool.Core
                     new DigimonBaseRow
                     {
                         Id = identity,
-                        Type =
-                            CheckedInt(
-                                type,
-                                $"Digimon {type} ID"),
-                        Model =
-                            ReadInt(
-                                node,
-                                "ModelID",
-                                $"Digimon {type}"),
-                        Name =
-                            node.Attribute("Name")?.Value
-                            ?? string.Empty,
-                        Level =
-                            ReadInt(
-                                node,
-                                "BaseLevel",
-                                $"Digimon {type}"),
-                        ScaleType =
-                            ReadInt(
-                                node,
-                                "DigimonType",
-                                $"Digimon {type}"),
-                        Attribute =
-                            ReadInt(
-                                node,
-                                "AttributeType",
-                                $"Digimon {type}"),
-                        Element =
-                            ReadInt(
-                                node,
-                                "BaseNatureType",
-                                $"Digimon {type}"),
+                        Type = CheckedInt(type, $"Digimon {type} ID"),
+                        Model = ReadInt(node, "ModelID", $"Digimon {type}"),
+                        Name = node.Attribute("Name")?.Value ?? string.Empty,
+                        Level = ReadInt(node, "BaseLevel", $"Digimon {type}"),
+                        ScaleType = ReadInt(node, "DigimonType", $"Digimon {type}"),
+                        Attribute = ReadInt(node, "AttributeType", $"Digimon {type}"),
+                        Element = ReadInt(node, "BaseNatureType", $"Digimon {type}"),
                         Family1 = families[0],
                         Family2 = families[1],
                         Family3 = families[2],
-                        ASValue =
-                            ReadIntAttribute(
-                                stats,
-                                "AttSpeed",
-                                $"Digimon {type} Stats"),
-                        ARValue =
-                            ReadIntAttribute(
-                                stats,
-                                "AttRange",
-                                $"Digimon {type} Stats"),
-                        ATValue =
-                            ReadIntAttribute(
-                                stats,
-                                "AttPower",
-                                $"Digimon {type} Stats"),
+                        ASValue = ReadIntAttribute(stats, "AttSpeed", $"Digimon {type} Stats"),
+                        ARValue = ReadIntAttribute(stats, "AttRange", $"Digimon {type} Stats"),
+                        ATValue = ReadIntAttribute(stats, "AttPower", $"Digimon {type} Stats"),
                         BLValue = 0,
-                        CTValue =
-                            ReadIntAttribute(
-                                stats,
-                                "CriticalRate",
-                                $"Digimon {type} Stats"),
-                        DEValue =
-                            ReadIntAttribute(
-                                stats,
-                                "DefPower",
-                                $"Digimon {type} Stats"),
-                        DSValue =
-                            ReadIntAttribute(
-                                stats,
-                                "DS",
-                                $"Digimon {type} Stats"),
-                        EVValue =
-                            ReadIntAttribute(
-                                stats,
-                                "Evasion",
-                                $"Digimon {type} Stats"),
-                        HPValue =
-                            ReadIntAttribute(
-                                stats,
-                                "HP",
-                                $"Digimon {type} Stats"),
-                        HTValue =
-                            ReadIntAttribute(
-                                stats,
-                                "HitRate",
-                                $"Digimon {type} Stats"),
-                        MSValue =
-                            ReadIntAttribute(
-                                stats,
-                                "MoveSpeed",
-                                $"Digimon {type} Stats"),
-                        WSValue =
-                            ReadIntLikeDecimal(
-                                node,
-                                "WalkLen",
-                                $"Digimon {type}"),
-                        EvolutionType =
-                            ReadInt(
-                                node,
-                                "EvolutionType",
-                                $"Digimon {type}")
+                        CTValue = ReadIntAttribute(stats, "CriticalRate", $"Digimon {type} Stats"),
+                        DEValue = ReadIntAttribute(stats, "DefPower", $"Digimon {type} Stats"),
+                        DSValue = ReadIntAttribute(stats, "DS", $"Digimon {type} Stats"),
+                        EVValue = ReadIntAttribute(stats, "Evasion", $"Digimon {type} Stats"),
+                        HPValue = ReadIntAttribute(stats, "HP", $"Digimon {type} Stats"),
+                        HTValue = ReadIntAttribute(stats, "HitRate", $"Digimon {type} Stats"),
+                        MSValue = ReadIntAttribute(stats, "MoveSpeed", $"Digimon {type} Stats"),
+                        WSValue = ReadIntLikeDecimal(node, "WalkLen", $"Digimon {type}"),
+                        EvolutionType = ReadInt(node, "EvolutionType", $"Digimon {type}")
                     });
             }
 
@@ -779,40 +516,22 @@ namespace DRW_Work_Tool.Core
             out List<EvolutionLineRow> evolutionLines,
             out List<EvolutionStageRow> evolutionStages)
         {
-            XElement root =
-                document.Root ??
-                throw new InvalidDataException(
-                    "DigimonEvo.xml não possui root.");
+            XElement root = document.Root ?? throw new InvalidDataException("DigimonEvo.xml não possui root.");
 
-            if (!root.Name.LocalName.Equals(
-                    "DigimonList",
-                    StringComparison.Ordinal))
-            {
-                throw new InvalidDataException(
-                    $"DigimonEvo.xml root inválido: <{root.Name.LocalName}>. Esperado <DigimonList>.");
-            }
+            if (!root.Name.LocalName.Equals("DigimonList", StringComparison.Ordinal))
+                throw new InvalidDataException($"DigimonEvo.xml root inválido: <{root.Name.LocalName}>. Esperado <DigimonList>.");
 
-            List<XElement> trees =
-                root.Elements("Digimon")
-                    .ToList();
+            List<XElement> trees = root.Elements("Digimon").ToList();
 
             if (trees.Count == 0)
-            {
-                throw new InvalidDataException(
-                    "DigimonEvo.xml não possui árvores.");
-            }
+                throw new InvalidDataException("DigimonEvo.xml não possui árvores.");
 
             evolutions = new List<EvolutionRow>();
             evolutionLines = new List<EvolutionLineRow>();
             evolutionStages = new List<EvolutionStageRow>();
 
-            var digimonIds =
-                digimons
-                    .Select(x => x.Type)
-                    .ToHashSet();
-
-            var seenRoots =
-                new HashSet<int>();
+            var digimonIds = digimons.Select(x => x.Type).ToHashSet();
+            var seenRoots = new HashSet<int>();
 
             int evolutionId = 0;
             int evolutionLineId = 0;
@@ -823,92 +542,38 @@ namespace DRW_Work_Tool.Core
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                int rootType =
-                    ReadInt(
-                        tree,
-                        "digiId",
-                        "DigimonEvo tree");
+                int rootType = ReadInt(tree, "digiId", "DigimonEvo tree");
 
                 if (rootType <= 0)
-                {
-                    throw new InvalidDataException(
-                        "DigimonEvo.xml contém tree digiId <= 0.");
-                }
+                    throw new InvalidDataException("DigimonEvo.xml contém tree digiId <= 0.");
 
                 if (!seenRoots.Add(rootType))
-                {
-                    throw new InvalidDataException(
-                        $"DigimonEvo.xml contém root digiId duplicado: {rootType}.");
-                }
+                    throw new InvalidDataException($"DigimonEvo.xml contém root digiId duplicado: {rootType}.");
 
-                List<XElement> nodes =
-                    tree.Elements("Evolution")
-                        .ToList();
-
-                int declaredCount =
-                    ReadInt(
-                        tree,
-                        "CountEvo",
-                        $"DigimonEvo tree {rootType}");
+                List<XElement> nodes = tree.Elements("Evolution").ToList();
+                int declaredCount = ReadInt(tree, "CountEvo", $"DigimonEvo tree {rootType}");
 
                 if (declaredCount != nodes.Count)
-                {
-                    throw new InvalidDataException(
-                        $"DigimonEvo tree {rootType}: CountEvo={declaredCount}, mas existem {nodes.Count} Evolution.");
-                }
+                    throw new InvalidDataException($"DigimonEvo tree {rootType}: CountEvo={declaredCount}, mas existem {nodes.Count} Evolution.");
 
                 if (nodes.Count == 0)
-                {
-                    throw new InvalidDataException(
-                        $"DigimonEvo tree {rootType}: sem Evolution.");
-                }
+                    throw new InvalidDataException($"DigimonEvo tree {rootType}: sem Evolution.");
 
                 List<XElement> rootNodes =
-                    nodes
-                        .Where(
-                            node =>
-                                ReadInt(
-                                    node,
-                                    "digiId",
-                                    $"DigimonEvo tree {rootType} Evolution") ==
-                                rootType)
-                        .ToList();
+                    nodes.Where(node => ReadInt(node, "digiId", $"DigimonEvo tree {rootType} Evolution") == rootType).ToList();
 
-                if (rootNodes.Count == 0)
-                {
-                    throw new InvalidDataException(
-                        $"DigimonEvo tree {rootType}: não existe nenhuma <Evolution> com digiId={rootType}. " +
-                        "O root da tree tem de existir dentro da própria lista de evoluções.");
-                }
+                if (rootNodes.Count != 1)
+                    throw new InvalidDataException($"DigimonEvo tree {rootType}: esperado exatamente um root Evolution com digiId={rootType}; encontrado {rootNodes.Count}.");
 
-                if (rootNodes.Count > 1)
-                {
-                    throw new InvalidDataException(
-                        $"DigimonEvo tree {rootType}: existem {rootNodes.Count} <Evolution> com digiId={rootType}; esperado exatamente 1.");
-                }
-
-                int rootLevel =
-                    ReadInt(
-                        rootNodes[0],
-                        "Level",
-                        $"DigimonEvo tree {rootType} root Evolution");
+                int rootLevel = ReadInt(rootNodes[0], "Level", $"DigimonEvo tree {rootType} root Evolution");
 
                 if (rootLevel != 1)
-                {
-                    throw new InvalidDataException(
-                        $"DigimonEvo tree {rootType}: a Evolution root digiId={rootType} tem Level={rootLevel}; esperado Level=1.");
-                }
+                    throw new InvalidDataException($"DigimonEvo tree {rootType}: a Evolution root digiId={rootType} tem Level={rootLevel}; esperado Level=1.");
 
-                int rootPhysicalIndex =
-                    nodes.IndexOf(
-                        rootNodes[0]);
+                int rootPhysicalIndex = nodes.IndexOf(rootNodes[0]);
 
                 if (rootPhysicalIndex != 0)
-                {
-                    log(
-                        $"INFO: DigimonEvo tree {rootType}: root digiId={rootType} está na posição física " +
-                        $"{rootPhysicalIndex + 1}/{nodes.Count} do XML. Isto é válido; a ordem original será preservada.");
-                }
+                    log($"INFO: DigimonEvo tree {rootType}: root na posição física {rootPhysicalIndex + 1}/{nodes.Count}; ordem original preservada.");
 
                 evolutionId++;
 
@@ -917,35 +582,20 @@ namespace DRW_Work_Tool.Core
                     {
                         Id = evolutionId,
                         Type = rootType,
-                        EvolutionRank =
-                            ReadInt(
-                                tree,
-                                "BattleType",
-                                $"DigimonEvo tree {rootType}")
+                        EvolutionRank = ReadInt(tree, "BattleType", $"DigimonEvo tree {rootType}")
                     });
 
                 foreach (XElement node in nodes)
                 {
-                    int type =
-                        ReadInt(
-                            node,
-                            "digiId",
-                            $"DigimonEvo tree {rootType}");
+                    int type = ReadInt(node, "digiId", $"DigimonEvo tree {rootType}");
 
                     if (!digimonIds.Contains(type))
                         unknownDigimonRefs++;
 
-                    int level =
-                        ReadInt(
-                            node,
-                            "Level",
-                            $"DigimonEvo {type}");
+                    int level = ReadInt(node, "Level", $"DigimonEvo {type}");
 
                     if (level < 0)
-                    {
-                        throw new InvalidDataException(
-                            $"DigimonEvo {type}: Level={level} inválido.");
-                    }
+                        throw new InvalidDataException($"DigimonEvo {type}: Level={level} inválido.");
 
                     evolutionLineId++;
 
@@ -955,67 +605,29 @@ namespace DRW_Work_Tool.Core
                             Id = evolutionLineId,
                             EvolutionId = evolutionId,
                             Type = type,
-                            UnlockItemSection =
-                                ReadInt(
-                                    node,
-                                    "m_nOpenItemTypeS",
-                                    $"DigimonEvo {type}"),
-                            UnlockItemSectionAmount =
-                                ReadInt(
-                                    node,
-                                    "m_nOpenItemNum",
-                                    $"DigimonEvo {type}"),
-                            UnlockLevel =
-                                ReadInt(
-                                    node,
-                                    "m_nOpenLevel",
-                                    $"DigimonEvo {type}"),
-                            UnlockQuestId =
-                                ReadInt(
-                                    node,
-                                    "m_nOpenQuest",
-                                    $"DigimonEvo {type}"),
+                            UnlockItemSection = ReadInt(node, "m_nOpenItemTypeS", $"DigimonEvo {type}"),
+                            UnlockItemSectionAmount = ReadInt(node, "m_nOpenItemNum", $"DigimonEvo {type}"),
+                            UnlockLevel = ReadInt(node, "m_nOpenLevel", $"DigimonEvo {type}"),
+                            UnlockQuestId = ReadInt(node, "m_nOpenQuest", $"DigimonEvo {type}"),
                             SlotLevel = level,
-                            RequiredAmount =
-                                ReadInt(
-                                    node,
-                                    "m_nUseItemNum",
-                                    $"DigimonEvo {type}"),
-                            RequiredItem =
-                                ReadInt(
-                                    node,
-                                    "m_nUseItem",
-                                    $"DigimonEvo {type}")
+                            RequiredAmount = ReadInt(node, "m_nUseItemNum", $"DigimonEvo {type}"),
+                            RequiredItem = ReadInt(node, "m_nUseItem", $"DigimonEvo {type}")
                         });
 
-                    List<XElement> links =
-                        node.Elements("EvolutionType")
-                            .ToList();
+                    List<XElement> links = node.Elements("EvolutionType").ToList();
 
                     if (links.Count != 9)
-                    {
-                        throw new InvalidDataException(
-                            $"DigimonEvo {type}: esperado exatamente 9 EvolutionType; encontrado {links.Count}.");
-                    }
+                        throw new InvalidDataException($"DigimonEvo {type}: esperado exatamente 9 EvolutionType; encontrado {links.Count}.");
 
                     foreach (XElement link in links)
                     {
                         stageId++;
-
                         evolutionStages.Add(
                             new EvolutionStageRow
                             {
                                 Id = stageId,
-                                Type =
-                                    ReadInt(
-                                        link,
-                                        "dwDigimonID",
-                                        $"DigimonEvo {type} EvolutionType"),
-                                Value =
-                                    ReadInt(
-                                        link,
-                                        "nSlot",
-                                        $"DigimonEvo {type} EvolutionType"),
+                                Type = ReadInt(link, "dwDigimonID", $"DigimonEvo {type} EvolutionType"),
+                                Value = ReadInt(link, "nSlot", $"DigimonEvo {type} EvolutionType"),
                                 EvolutionLineId = evolutionLineId
                             });
                     }
@@ -1023,17 +635,10 @@ namespace DRW_Work_Tool.Core
             }
 
             if (evolutionStages.Count != evolutionLines.Count * 9)
-            {
-                throw new InvalidDataException(
-                    "DigimonEvo validation interna: EvolutionStage != EvolutionLine * 9.");
-            }
+                throw new InvalidDataException("DigimonEvo validation interna: EvolutionStage != EvolutionLine * 9.");
 
             if (unknownDigimonRefs > 0)
-            {
-                log(
-                    $"WARNING: DigimonEvo contém {unknownDigimonRefs:N0} Evolution digiId " +
-                    "que não existem em Digimon_List.xml. Os valores serão preservados.");
-            }
+                log($"WARNING: DigimonEvo contém {unknownDigimonRefs:N0} Evolution digiId que não existem em Digimon_List.xml. Os valores serão preservados.");
 
             log(
                 "Evolution mapping validado: Evolution.Type=tree digiId, " +
@@ -1054,61 +659,43 @@ namespace DRW_Work_Tool.Core
             out List<uint> missingSkillReferences,
             out int sharedSkillAssociations)
         {
-            XElement root =
-                document.Root ??
-                throw new InvalidDataException(
-                    "Skill.xml não possui root.");
+            XElement root = document.Root ?? throw new InvalidDataException("Skill.xml não possui root.");
 
-            if (!root.Name.LocalName.Equals(
-                    "SkillDataArray",
-                    StringComparison.Ordinal))
-            {
-                throw new InvalidDataException(
-                    $"Skill.xml root inválido: <{root.Name.LocalName}>. Esperado <SkillDataArray>.");
-            }
+            if (!root.Name.LocalName.Equals("SkillDataArray", StringComparison.Ordinal))
+                throw new InvalidDataException($"Skill.xml root inválido: <{root.Name.LocalName}>. Esperado <SkillDataArray>.");
 
-            List<XElement> physical =
-                root.Elements("SkillData")
-                    .ToList();
+            List<XElement> physical = root.Elements("SkillData").ToList();
 
             if (physical.Count == 0)
+                throw new InvalidDataException("Skill.xml não contém SkillData.");
+
+            var occurrences =
+                physical.Select(
+                    node =>
+                        new SkillPhysicalOccurrence
+                        {
+                            Node = node,
+                            SkillId = ReadUInt(node, "s_dwID", "SkillData")
+                        }).ToList();
+
+            if (occurrences.Any(x => x.SkillId == 0))
+                throw new InvalidDataException("Skill.xml contém s_dwID=0.");
+
+            List<XElement> unique =
+                occurrences.GroupBy(x => x.SkillId).Select(g => g.First().Node).ToList();
+
+            duplicateSkillIdsCollapsed = physical.Count - unique.Count;
+
+            foreach (IGrouping<uint, SkillPhysicalOccurrence> duplicate in
+                occurrences.GroupBy(x => x.SkillId).Where(g => g.Count() > 1))
             {
-                throw new InvalidDataException(
-                    "Skill.xml não contém SkillData.");
-            }
-
-            var unique = new List<XElement>();
-            var seen = new HashSet<uint>();
-            duplicateSkillIdsCollapsed = 0;
-
-            foreach (XElement node in physical)
-            {
-                uint id =
-                    ReadUInt(
-                        node,
-                        "s_dwID",
-                        "SkillData");
-
-                if (id == 0)
-                {
-                    throw new InvalidDataException(
-                        "Skill.xml contém s_dwID=0.");
-                }
-
-                if (!seen.Add(id))
-                {
-                    duplicateSkillIdsCollapsed++;
-                    log(
-                        $"WARNING: Skill.xml contém s_dwID duplicado {id}; " +
-                        "a primeira ocorrência física será usada para a database.");
-                    continue;
-                }
-
-                unique.Add(node);
+                log(
+                    $"INFO: Skill.xml contém {duplicate.Count()} ocorrências físicas de s_dwID={duplicate.Key}. " +
+                    "SkillCode/SkillCodeApply usam a primeira ocorrência; SkillInfo preserva todas as ocorrências físicas.");
             }
 
             skillCodes = new List<SkillCodeRow>(unique.Count);
-            skillInfos = new List<SkillInfoRow>(unique.Count);
+            skillInfos = new List<SkillInfoRow>();
             skillApplies = new List<SkillApplyRow>(unique.Count * 3);
             digimonSkills = new List<DigimonSkillRow>();
 
@@ -1118,16 +705,10 @@ namespace DRW_Work_Tool.Core
             int digimonSkillId = 0;
             sharedSkillAssociations = 0;
 
-            var uniqueIds =
-                unique
-                    .Select(x => ReadUInt(x, "s_dwID", "SkillData"))
-                    .ToHashSet();
+            var uniqueIds = unique.Select(x => ReadUInt(x, "s_dwID", "SkillData")).ToHashSet();
 
             missingSkillReferences =
-                skillAssociations.Keys
-                    .Where(x => !uniqueIds.Contains(x))
-                    .OrderBy(x => x)
-                    .ToList();
+                skillAssociations.Keys.Where(x => !uniqueIds.Contains(x)).OrderBy(x => x).ToList();
 
             foreach (XElement node in unique)
             {
@@ -1146,18 +727,7 @@ namespace DRW_Work_Tool.Core
                         Comment = ReadOptionalText(node, "s_szComment")
                     });
 
-                List<XElement> applies =
-                    node.Element("SkillApply")?
-                        .Elements("IncreaseApply")
-                        .ToList()
-                    ?? throw new InvalidDataException(
-                        $"Skill {skillId}: SkillApply ausente.");
-
-                if (applies.Count != 3)
-                {
-                    throw new InvalidDataException(
-                        $"Skill {skillId}: esperado exatamente 3 IncreaseApply; encontrado {applies.Count}.");
-                }
+                List<XElement> applies = GetSkillApplies(node, skillId);
 
                 for (int i = 0; i < 3; i++)
                 {
@@ -1168,8 +738,8 @@ namespace DRW_Work_Tool.Core
                         new SkillApplyRow
                         {
                             Id = applyId,
-                            Type = ReadInt(apply, "s_nA", $"Skill {skillId} Apply {i + 1}"),
-                            Attribute = ReadInt(apply, "s_nID", $"Skill {skillId} Apply {i + 1}"),
+                            Type = ReadInt(apply, "s_nID", $"Skill {skillId} Apply {i + 1}"),
+                            Attribute = ReadInt(apply, "s_nA", $"Skill {skillId} Apply {i + 1}"),
                             Value = ReadInt(apply, "s_nB", $"Skill {skillId} Apply {i + 1}"),
                             AdditionalValue = ReadInt(apply, "s_nC", $"Skill {skillId} Apply {i + 1}"),
                             SkillCodeAssetId = skillCodeAssetId,
@@ -1178,85 +748,12 @@ namespace DRW_Work_Tool.Core
                         });
                 }
 
-                skillInfoId++;
+                List<SkillAssociation> orderedAssociations =
+                    skillAssociations.TryGetValue(skillId, out List<SkillAssociation>? associations) && associations.Count > 0
+                        ? associations.Distinct(SkillAssociationComparer.Instance).OrderBy(x => x.DigimonType).ThenBy(x => x.Slot).ToList()
+                        : new List<SkillAssociation>();
 
-                // IMPORTANT: Asset.SkillInfo.Value is NOT Apply1.s_nB.
-                // It follows s_fAttRange_NorDmg. The existing DB sample proves
-                // this directly: 7700511 has Value=0 while Apply1.s_nB=18103.
-                int value =
-                    ReadIntLikeDecimal(
-                        node,
-                        "s_fAttRange_NorDmg",
-                        $"Skill {skillId}");
-
-                skillInfos.Add(
-                    new SkillInfoRow
-                    {
-                        Id = skillInfoId,
-                        SkillId = sqlSkillId,
-                        Name = ReadOptionalText(node, "s_szName"),
-                        DSUsage = ReadInt(node, "s_nUseDS", $"Skill {skillId}"),
-                        HPUsage = ReadInt(node, "s_nUseHP", $"Skill {skillId}"),
-                        Value = value,
-                        CastingTime = ReadSkillCastingTime(node, skillId, log),
-                        Cooldown = ReadIntLikeDecimal(node, "s_fCooldownTime", $"Skill {skillId}"),
-                        MaxLevel = ReadInt(node, "s_nMaxLevel", $"Skill {skillId}"),
-                        RequiredPoints = ReadInt(node, "s_nLevelupPoint", $"Skill {skillId}"),
-                        Target = ReadInt(node, "s_nTarget", $"Skill {skillId}"),
-                        AreaOfEffect = ReadInt(node, "s_nAttSphere", $"Skill {skillId}"),
-                        AoEMinDamage = ReadIntLikeDecimal(node, "s_fAttRange_MinDmg", $"Skill {skillId}"),
-                        AoEMaxDamage = ReadIntLikeDecimal(node, "s_fAttRange_MaxDmg", $"Skill {skillId}"),
-                        Range = ReadIntLikeDecimal(node, "s_fAttRange", $"Skill {skillId}"),
-                        UnlockLevel = ReadInt(node, "s_nLimitLevel", $"Skill {skillId}"),
-                        MemoryChips = ReadTinyInt(node, "s_nReq_Item", $"Skill {skillId}"),
-
-                        // IMPORTANT: these are the three IncreaseApply.s_nB
-                        // parameters, in physical order. They are not s_nBuffCode.
-                        // Example 7700511 => 18103 / 10 / 0, matching SQL exactly.
-                        FirstConditionCode = ReadInt(applies[0], "s_nB", $"Skill {skillId} Apply 1"),
-                        SecondConditionCode = ReadInt(applies[1], "s_nB", $"Skill {skillId} Apply 2"),
-                        ThirdConditionCode = ReadInt(applies[2], "s_nB", $"Skill {skillId} Apply 3"),
-
-                        Type = ReadInt(node, "s_nAttType", $"Skill {skillId}"),
-                        Description = ReadOptionalText(node, "s_szComment"),
-                        FamilyType = ReadInt(node, "s_nFamilyType", $"Skill {skillId}"),
-                        SkillType = ReadInt(node, "s_nSkillType", $"Skill {skillId}")
-                    });
-
-                if (skillAssociations.TryGetValue(
-                        skillId,
-                        out List<SkillAssociation>? associations) &&
-                    associations.Count > 0)
-                {
-                    List<SkillAssociation> ordered =
-                        associations
-                            .Distinct(SkillAssociationComparer.Instance)
-                            .OrderBy(x => x.DigimonType)
-                            .ThenBy(x => x.Slot)
-                            .ToList();
-
-                    if (ordered.Count > 1)
-                        sharedSkillAssociations += ordered.Count - 1;
-
-                    foreach (SkillAssociation association in ordered)
-                    {
-                        digimonSkillId++;
-
-                        digimonSkills.Add(
-                            new DigimonSkillRow
-                            {
-                                Id = digimonSkillId,
-                                Type = CheckedInt(
-                                    association.DigimonType,
-                                    $"DigimonSkill Skill {skillId}"),
-                                Slot = association.Slot,
-                                // Asset.DigimonSkill.SkillId stores the XML skill code,
-                                // not the Asset.SkillInfo identity value.
-                                SkillId = sqlSkillId
-                            });
-                    }
-                }
-                else
+                if (orderedAssociations.Count == 0)
                 {
                     digimonSkillId++;
                     digimonSkills.Add(
@@ -1267,37 +764,131 @@ namespace DRW_Work_Tool.Core
                             Slot = 0,
                             SkillId = sqlSkillId
                         });
+
+                    skillInfoId++;
+                    skillInfos.Add(BuildSkillInfoRow(skillInfoId, node, skillId, sqlSkillId, 0));
+                }
+                else
+                {
+                    if (orderedAssociations.Count > 1)
+                        sharedSkillAssociations += orderedAssociations.Count - 1;
+
+                    foreach (SkillAssociation association in orderedAssociations)
+                    {
+                        int digimonType = CheckedInt(association.DigimonType, $"DigimonSkill Skill {skillId}");
+
+                        digimonSkillId++;
+                        digimonSkills.Add(
+                            new DigimonSkillRow
+                            {
+                                Id = digimonSkillId,
+                                Type = digimonType,
+                                Slot = association.Slot,
+                                SkillId = sqlSkillId
+                            });
+
+                        skillInfoId++;
+                        skillInfos.Add(BuildSkillInfoRow(skillInfoId, node, skillId, sqlSkillId, digimonType));
+                    }
                 }
             }
 
+            var seenPhysicalIds = new HashSet<uint>();
+
+            foreach (SkillPhysicalOccurrence occurrence in occurrences)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (seenPhysicalIds.Add(occurrence.SkillId))
+                    continue;
+
+                uint skillId = occurrence.SkillId;
+                int sqlSkillId = CheckedInt(skillId, $"Skill {skillId}");
+
+                skillInfoId++;
+                skillInfos.Add(BuildSkillInfoRow(skillInfoId, occurrence.Node, skillId, sqlSkillId, 0));
+            }
+
             if (skillApplies.Count != skillCodes.Count * 3)
+                throw new InvalidDataException("Skill validation interna: SkillCodeApply != SkillCode * 3.");
+
+            int expectedSkillInfos = digimonSkills.Count + duplicateSkillIdsCollapsed;
+
+            if (skillInfos.Count != expectedSkillInfos)
             {
                 throw new InvalidDataException(
-                    "Skill validation interna: SkillCodeApply != SkillCode * 3.");
+                    $"SkillInfo cardinality inválida: esperado {expectedSkillInfos:N0} " +
+                    $"(DigimonSkill {digimonSkills.Count:N0} + physical duplicates {duplicateSkillIdsCollapsed:N0}), " +
+                    $"gerado {skillInfos.Count:N0}.");
             }
 
             log(
-                $"Skill duplicate policy: physical={physical.Count:N0}, " +
-                $"unique={unique.Count:N0}, collapsed={duplicateSkillIdsCollapsed:N0}.");
+                $"Skill physical={physical.Count:N0}, unique={unique.Count:N0}, physical duplicates={duplicateSkillIdsCollapsed:N0}.");
 
             log(
-                $"DigimonSkill mapping: {digimonSkills.Count:N0} rows; " +
-                $"shared extra associations={sharedSkillAssociations:N0}; " +
+                $"DigimonSkill mapping: {digimonSkills.Count:N0} rows; shared extra associations={sharedSkillAssociations:N0}; " +
                 "unassociated Skill.xml IDs use Type=0, Slot=0.");
 
             log(
-                "SkillCodeApply mapping validado: Type=s_nA, Attribute=s_nID, " +
-                "Value=s_nB, AdditionalValue=s_nC, IncreaseValue=s_nIncrease_B_Point, " +
-                "Chance=s_nInvoke_Rate/100.");
+                $"SkillInfo mapping: {skillInfos.Count:N0} rows = DigimonSkill {digimonSkills.Count:N0} + physical duplicates {duplicateSkillIdsCollapsed:N0}.");
 
             log(
-                "SkillInfo effect mapping validado: Value=s_fAttRange_NorDmg; " +
-                "First/Second/ThirdConditionCode=s_nB de IncreaseApply 1/2/3. " +
-                "Isto preserva os parâmetros usados por damage, buffs, velocidade e outros efeitos condicionais.");
+                "SkillCodeApply ground truth: Type=s_nID, Attribute=s_nA, Value=s_nB, AdditionalValue=s_nC, " +
+                "IncreaseValue=s_nIncrease_B_Point, Chance=s_nInvoke_Rate/100.");
 
             log(
-                "SkillInfo mapping: MemoryChips=s_nReq_Item (SQL tinyint). " +
-                "s_nMemorySkill não é gravado em MemoryChips; no Skill.xml atual contém valores como 1700/2200.");
+                "SkillInfo ground truth: Value=0, CastingTime=0, MemoryChips=0; " +
+                "First/Second/ThirdConditionCode=s_nB de IncreaseApply 1/2/3; Type=DigimonSkill.Type (ou 0 sem associação).");
+        }
+
+        private static List<XElement> GetSkillApplies(XElement node, uint skillId)
+        {
+            List<XElement> applies =
+                node.Element("SkillApply")?.Elements("IncreaseApply").ToList()
+                ?? throw new InvalidDataException($"Skill {skillId}: SkillApply ausente.");
+
+            if (applies.Count != 3)
+                throw new InvalidDataException($"Skill {skillId}: esperado exatamente 3 IncreaseApply; encontrado {applies.Count}.");
+
+            return applies;
+        }
+
+        private static SkillInfoRow BuildSkillInfoRow(
+            int id,
+            XElement node,
+            uint skillId,
+            int sqlSkillId,
+            int digimonType)
+        {
+            List<XElement> applies = GetSkillApplies(node, skillId);
+
+            return new SkillInfoRow
+            {
+                Id = id,
+                SkillId = sqlSkillId,
+                Name = ReadOptionalText(node, "s_szName"),
+                DSUsage = ReadInt(node, "s_nUseDS", $"Skill {skillId}"),
+                HPUsage = ReadInt(node, "s_nUseHP", $"Skill {skillId}"),
+                Value = 0,
+                CastingTime = 0,
+                Cooldown = ReadIntLikeDecimal(node, "s_fCooldownTime", $"Skill {skillId}"),
+                MaxLevel = ReadInt(node, "s_nMaxLevel", $"Skill {skillId}"),
+                RequiredPoints = ReadInt(node, "s_nLevelupPoint", $"Skill {skillId}"),
+                Target = ReadInt(node, "s_nTarget", $"Skill {skillId}"),
+                AreaOfEffect = ReadInt(node, "s_nAttSphere", $"Skill {skillId}"),
+                AoEMinDamage = ReadIntLikeDecimal(node, "s_fAttRange_MinDmg", $"Skill {skillId}"),
+                AoEMaxDamage = ReadIntLikeDecimal(node, "s_fAttRange_MaxDmg", $"Skill {skillId}"),
+                Range = ReadIntLikeDecimal(node, "s_fAttRange", $"Skill {skillId}"),
+                UnlockLevel = ReadInt(node, "s_nLimitLevel", $"Skill {skillId}"),
+                MemoryChips = 0,
+                FirstConditionCode = ReadInt(applies[0], "s_nB", $"Skill {skillId} Apply 1"),
+                SecondConditionCode = ReadInt(applies[1], "s_nB", $"Skill {skillId} Apply 2"),
+                ThirdConditionCode = ReadInt(applies[2], "s_nB", $"Skill {skillId} Apply 3"),
+                Type = digimonType,
+                Description = ReadOptionalText(node, "s_szComment"),
+                FamilyType = ReadInt(node, "s_nFamilyType", $"Skill {skillId}"),
+                SkillType = ReadInt(node, "s_nSkillType", $"Skill {skillId}")
+            };
         }
 
         private static async Task ClearCoreTablesAsync(
@@ -1322,25 +913,19 @@ namespace DRW_Work_Tool.Core
                 DBCC CHECKIDENT ('dmo.Asset.SkillCodeApply', RESEED, 0);
                 DBCC CHECKIDENT ('dmo.Asset.SkillInfo', RESEED, 0);
                 DBCC CHECKIDENT ('dmo.Asset.SkillCode', RESEED, 0);
-
                 DBCC CHECKIDENT ('dmo.Asset.EvolutionStage', RESEED, 0);
                 DBCC CHECKIDENT ('dmo.Asset.EvolutionLine', RESEED, 0);
                 DBCC CHECKIDENT ('dmo.Asset.Evolution', RESEED, 0);
-
                 DBCC CHECKIDENT ('dmo.Asset.DigimonBaseInfo', RESEED, 0);
                 """;
 
             await using var command =
-                new SqlCommand(
-                    sql,
-                    connection,
-                    transaction)
+                new SqlCommand(sql, connection, transaction)
                 {
                     CommandTimeout = 180
                 };
 
-            await command.ExecuteNonQueryAsync(
-                cancellationToken);
+            await command.ExecuteNonQueryAsync(cancellationToken);
         }
 
         private static async Task BulkInsertAsync(
@@ -1368,9 +953,7 @@ namespace DRW_Work_Tool.Core
                 };
 
             foreach (DataColumn column in table.Columns)
-            {
                 bulk.ColumnMappings.Add(column.ColumnName, column.ColumnName);
-            }
 
             await bulk.WriteToServerAsync(table, cancellationToken);
         }
@@ -1398,19 +981,13 @@ namespace DRW_Work_Tool.Core
             foreach ((string table, int count) in expected)
             {
                 await using var command =
-                    new SqlCommand(
-                        $"SELECT COUNT_BIG(*) FROM {table};",
-                        connection,
-                        transaction);
+                    new SqlCommand($"SELECT COUNT_BIG(*) FROM {table};", connection, transaction);
 
                 object? scalar = await command.ExecuteScalarAsync(cancellationToken);
                 long actual = Convert.ToInt64(scalar, CultureInfo.InvariantCulture);
 
                 if (actual != count)
-                {
-                    throw new InvalidDataException(
-                        $"Verificação SQL falhou em {table}: esperado={count}, atual={actual}.");
-                }
+                    throw new InvalidDataException($"Verificação SQL falhou em {table}: esperado={count}, atual={actual}.");
 
                 log($"VERIFY OK: {table} = {actual:N0} rows.");
             }
@@ -1429,16 +1006,10 @@ namespace DRW_Work_Tool.Core
                 ("MSValue", typeof(int)), ("WSValue", typeof(int)), ("EvolutionType", typeof(int)));
 
             foreach (DigimonBaseRow r in rows)
-            {
-                t.Rows.Add(
-                    r.Id, r.Type, r.Model, r.Name, r.Level,
-                    r.ScaleType, r.Attribute, r.Element,
-                    r.Family1, r.Family2, r.Family3,
-                    r.ASValue, r.ARValue, r.ATValue, r.BLValue,
-                    r.CTValue, r.DEValue, r.DSValue, r.EVValue,
-                    r.HPValue, r.HTValue, r.MSValue, r.WSValue,
-                    r.EvolutionType);
-            }
+                t.Rows.Add(r.Id, r.Type, r.Model, r.Name, r.Level, r.ScaleType, r.Attribute, r.Element,
+                    r.Family1, r.Family2, r.Family3, r.ASValue, r.ARValue, r.ATValue, r.BLValue,
+                    r.CTValue, r.DEValue, r.DSValue, r.EVValue, r.HPValue, r.HTValue, r.MSValue,
+                    r.WSValue, r.EvolutionType);
 
             return t;
         }
@@ -1460,11 +1031,9 @@ namespace DRW_Work_Tool.Core
                 ("RequiredAmount", typeof(int)), ("RequiredItem", typeof(int)));
 
             foreach (EvolutionLineRow r in rows)
-            {
-                t.Rows.Add(r.Id, r.EvolutionId, r.Type, r.UnlockItemSection,
-                    r.UnlockItemSectionAmount, r.UnlockLevel, r.UnlockQuestId,
-                    r.SlotLevel, r.RequiredAmount, r.RequiredItem);
-            }
+                t.Rows.Add(r.Id, r.EvolutionId, r.Type, r.UnlockItemSection, r.UnlockItemSectionAmount,
+                    r.UnlockLevel, r.UnlockQuestId, r.SlotLevel, r.RequiredAmount, r.RequiredItem);
+
             return t;
         }
 
@@ -1493,6 +1062,7 @@ namespace DRW_Work_Tool.Core
 
             foreach (SkillApplyRow r in rows)
                 t.Rows.Add(r.Id, r.Type, r.Attribute, r.Value, r.AdditionalValue, r.SkillCodeAssetId, r.IncreaseValue, r.Chance);
+
             return t;
         }
 
@@ -1510,15 +1080,11 @@ namespace DRW_Work_Tool.Core
                 ("Description", typeof(string)), ("FamilyType", typeof(int)), ("SkillType", typeof(int)));
 
             foreach (SkillInfoRow r in rows)
-            {
-                t.Rows.Add(
-                    r.Id, r.SkillId, r.Name, r.DSUsage, r.HPUsage, r.Value,
-                    r.CastingTime, r.Cooldown, r.MaxLevel, r.RequiredPoints,
-                    r.Target, r.AreaOfEffect, r.AoEMinDamage, r.AoEMaxDamage,
-                    r.Range, r.UnlockLevel, r.MemoryChips, r.FirstConditionCode,
-                    r.SecondConditionCode, r.ThirdConditionCode, r.Type,
-                    r.Description, r.FamilyType, r.SkillType);
-            }
+                t.Rows.Add(r.Id, r.SkillId, r.Name, r.DSUsage, r.HPUsage, r.Value, r.CastingTime,
+                    r.Cooldown, r.MaxLevel, r.RequiredPoints, r.Target, r.AreaOfEffect, r.AoEMinDamage,
+                    r.AoEMaxDamage, r.Range, r.UnlockLevel, r.MemoryChips, r.FirstConditionCode,
+                    r.SecondConditionCode, r.ThirdConditionCode, r.Type, r.Description, r.FamilyType, r.SkillType);
+
             return t;
         }
 
@@ -1589,38 +1155,6 @@ namespace DRW_Work_Tool.Core
             if (value < int.MinValue || value > int.MaxValue)
                 throw new OverflowException($"{context}={value} não cabe em SQL Int32.");
             return (int)value;
-        }
-
-        private static int ReadSkillCastingTime(XElement node, uint skillId, Action<string> log)
-        {
-            int value = ReadIntLikeDecimal(node, "s_fCastingTime", $"Skill {skillId}");
-
-            if (value == 107479040)
-            {
-                string name = ReadOptionalText(node, "s_szName");
-                log(
-                    $"WARNING: Skill {skillId}" +
-                    (string.IsNullOrWhiteSpace(name) ? string.Empty : $" ({name})") +
-                    ": s_fCastingTime=107479040 é um valor anómalo do client. " +
-                    "CastingTime será importado como 0; Skill.xml não será alterado.");
-                return 0;
-            }
-
-            if (value < 0 || value > 60000)
-            {
-                throw new InvalidDataException(
-                    $"Skill {skillId}: s_fCastingTime={value} está fora do intervalo seguro 0..60000. " +
-                    "Import cancelado durante a validação, antes de alterar a database.");
-            }
-            return value;
-        }
-
-        private static int ReadTinyInt(XElement parent, string name, string context)
-        {
-            int value = ReadInt(parent, name, context);
-            if (value < byte.MinValue || value > byte.MaxValue)
-                throw new InvalidDataException($"{context} <{name}>={value} não cabe em SQL tinyint (0..255).");
-            return value;
         }
 
         private static int ReadIntLikeDecimal(XElement parent, string name, string context)
@@ -1773,6 +1307,12 @@ namespace DRW_Work_Tool.Core
             public int Type { get; init; }
             public int Slot { get; init; }
             public int SkillId { get; init; }
+        }
+
+        private sealed class SkillPhysicalOccurrence
+        {
+            public required XElement Node { get; init; }
+            public uint SkillId { get; init; }
         }
 
         private sealed class SkillAssociation
