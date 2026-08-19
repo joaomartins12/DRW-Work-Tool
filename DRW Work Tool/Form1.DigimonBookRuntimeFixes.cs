@@ -43,19 +43,18 @@ namespace DRW_Work_Tool
             state.Content.AutoScroll = false;
             ApplyDigimonBookStableLayout(page, state);
 
-            // ApplyDigimonBookStableLayout still schedules the legacy card polish.
-            // Run our internal-tab routing afterwards so modal EDIT buttons can no
-            // longer win the race or remain visible.
             BeginInvoke(new Action(() =>
             {
                 if (page.IsDisposed || state.Content.IsDisposed) return;
                 EnhanceDigimonBookInternalEditors(page, state);
+                EnhanceDigimonBookSafeDeckButtons(page, state);
                 HideLegacyDigimonBookEditButtons(state);
 
                 BeginInvoke(new Action(() =>
                 {
                     if (page.IsDisposed || state.Content.IsDisposed) return;
                     EnhanceDigimonBookInternalEditors(page, state);
+                    EnhanceDigimonBookSafeDeckButtons(page, state);
                     HideLegacyDigimonBookEditButtons(state);
                 }));
             }));
@@ -71,10 +70,10 @@ namespace DRW_Work_Tool
                 foreach (Button button in card.Controls.OfType<Button>())
                 {
                     bool bookInfoLive = button.Name == "DigimonBookBookInfoEditTab";
-                    bool deckLive = button.Name == "DigimonBookDeckEditTab";
+                    bool deckSafe = button.Name == "DigimonBookDeckEditSafe";
                     bool editText = button.Text.Equals("EDIT", StringComparison.OrdinalIgnoreCase) ||
                                     button.Text.Equals("EDIT DECK", StringComparison.OrdinalIgnoreCase);
-                    if (editText && !bookInfoLive && !deckLive)
+                    if (editText && !bookInfoLive && !deckSafe)
                         button.Visible = false;
                 }
             }
