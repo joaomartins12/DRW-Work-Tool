@@ -1,0 +1,342 @@
+name: CashShop Grouped Options
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Group CashShop tiers and add delete/options manager
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('DRW Work Tool/Form1.CashShopEditor.cs')
+          text = path.read_text(encoding='utf-8-sig')
+
+          # 1) Record exposes all CASHINFO variants from the shared container.
+          old = '''            public int Price => ParseInt(Node.Element("nRealSellingPrice")?.Value);\n\n            public string Name'''
+          new = '''            public int Price => ParseInt(Node.Element("nRealSellingPrice")?.Value);\n            public IReadOnlyList<XElement> Variants =>\n                Container.Element("CashInfo")?.Elements("CASHINFO").ToList()\n                ?? new List<XElement>();\n            public int VariantCount => Math.Max(1, Variants.Count);\n\n            public string Name'''
+          if old not in text: raise SystemExit('record marker missing')
+          text = text.replace(old, new, 1)
+
+          # 2) Unique IDs must inspect every tier, not just card/primary rows.
+          start = text.index('            public uint GetNextUniqueId(CashShopRecord? current = null)')
+          end = text.index('            public void Save(CashShopRecord source, XElement working, uint cashShopId)', start)
+          repl = '''            public uint GetNextUniqueId(CashShopRecord? current = null)\n            {\n                HashSet<uint> used = Records\n                    .SelectMany(x => x.Variants)\n                    .Where(x => current == null || !ReferenceEquals(x, current.Node))\n                    .Select(x => ParseUInt(x.Element("unique_id")?.Value))\n                    .Where(x => x > 0)\n                    .ToHashSet();\n\n                uint candidate = used.Count == 0 ? 1u : used.Max() + 1u;\n                while (candidate > 0 && used.Contains(candidate))\n                    candidate++;\n\n                return candidate == 0 ? 1u : candidate;\n            }\n\n            public bool IsCashShopIdAvailable(uint id, CashShopRecord current) =>\n                id > 0 && !Records.Any(x =>\n                    !ReferenceEquals(x.Container, current.Container) &&\n                    x.CashShopId == id);\n\n            public bool IsUniqueIdAvailable(uint id, CashShopRecord current) =>\n                id > 0 && !Records\n                    .SelectMany(x => x.Variants)\n                    .Any(x => !ReferenceEquals(x, current.Node) &&\n                              ParseUInt(x.Element("unique_id")?.Value) == id);\n\n'''
+          text = text[:start] + repl + text[end:]
+
+          # 3) Add grouped-options save and whole-card delete service methods.
+          marker = '''                SaveDocument(source.Document, source.FilePath);\n            }\n\n            public CashShopRecord CreateTemplate'''
+          addition = '''                SaveDocument(source.Document, source.FilePath);\n            }\n\n            public void SaveOptions(CashShopRecord source, IReadOnlyList<XElement> options)\n            {\n                if (options.Count == 0)\n                    throw new InvalidDataException("A Cash Shop product must contain at least one purchase option.");\n\n                var localIds = new HashSet<uint>();\n                HashSet<uint> externalIds = Records\n                    .Where(x => !ReferenceEquals(x.Container, source.Container))\n                    .SelectMany(x => x.Variants)\n                    .Select(x => ParseUInt(x.Element("unique_id")?.Value))\n                    .Where(x => x > 0)\n                    .ToHashSet();\n\n                foreach (XElement option in options)\n                {\n                    uint id = ParseUInt(option.Element("unique_id")?.Value);\n                    if (id == 0)\n                        throw new InvalidDataException("Every purchase option needs a valid Unique Product ID.");\n                    if (!localIds.Add(id))\n                        throw new InvalidDataException($"Unique Product ID {id} is duplicated inside this product group.");\n                    if (externalIds.Contains(id))\n                        throw new InvalidDataException($"Unique Product ID {id} is already used by another Cash Shop product.");\n                }\n\n                XElement cashInfo = source.Container.Element("CashInfo") ?? new XElement("CashInfo");\n                if (cashInfo.Parent == null)\n                    source.Container.Add(cashInfo);\n\n                cashInfo.Elements("CASHINFO").Remove();\n                foreach (XElement option in options)\n                    cashInfo.Add(new XElement(option));\n\n                source.Node = cashInfo.Elements("CASHINFO").First();\n                SaveDocument(source.Document, source.FilePath);\n            }\n\n            public void DeleteRecord(CashShopRecord record)\n            {\n                record.Container.Remove();\n                SaveDocument(record.Document, record.FilePath);\n                Records.RemoveAll(x => ReferenceEquals(x.Container, record.Container));\n                MainRecords.RemoveAll(x => ReferenceEquals(x.Container, record.Container));\n            }\n\n            public CashShopRecord CreateTemplate'''
+          if marker not in text: raise SystemExit('save marker missing')
+          text = text.replace(marker, addition, 1)
+
+          # 4) Clone entire CashShopInformationCount, preserving tiers but assigning fresh IDs.
+          cstart = text.index('            private CashShopRecord CloneCore(CashShopRecord source, string name)')
+          cend = text.index('            private void LoadCanonicalGroup(', cstart)
+          clone = '''            private CashShopRecord CloneCore(CashShopRecord source, string name)\n            {\n                uint nextCashShopId = GetNextCashShopId();\n                XElement newContainer = new XElement(source.Container);\n                Set(newContainer, "CashShopId", nextCashShopId.ToString(CultureInfo.InvariantCulture));\n\n                List<XElement> options = newContainer\n                    .Element("CashInfo")?.Elements("CASHINFO").ToList()\n                    ?? new List<XElement>();\n\n                if (options.Count == 0)\n                    throw new InvalidDataException("The selected Cash Shop template has no CASHINFO options.");\n\n                HashSet<uint> used = Records\n                    .SelectMany(x => x.Variants)\n                    .Select(x => ParseUInt(x.Element("unique_id")?.Value))\n                    .Where(x => x > 0)\n                    .ToHashSet();\n\n                uint candidate = used.Count == 0 ? 1u : used.Max() + 1u;\n                for (int i = 0; i < options.Count; i++)\n                {\n                    while (candidate == 0 || used.Contains(candidate)) candidate++;\n                    Set(options[i], "unique_id", candidate.ToString(CultureInfo.InvariantCulture));\n                    Set(options[i], "Enabled", "0");\n                    if (i == 0) Set(options[i], "Name", name);\n                    used.Add(candidate);\n                    candidate++;\n                }\n\n                source.Container.AddAfterSelf(newContainer);\n                SaveDocument(source.Document, source.FilePath);\n\n                var record = new CashShopRecord\n                {\n                    FilePath = source.FilePath,\n                    Document = source.Document,\n                    Container = newContainer,\n                    Node = options[0],\n                    Group = source.Group,\n                    Category = source.Category\n                };\n\n                Records.Add(record);\n                return record;\n            }\n\n'''
+          text = text[:cstart] + clone + text[cend:]
+
+          # 5) One card per CashShopInformationCount: primary CASHINFO only.
+          old_loop = '''                        foreach (XElement node in cashInfo.Elements("CASHINFO"))\n                        {\n                            Records.Add(new CashShopRecord\n                            {\n                                FilePath = file,\n                                Document = document,\n                                Container = container,\n                                Node = node,\n                                Group = groupName,\n                                Category = category\n                            });\n                        }'''
+          new_loop = '''                        XElement? node = cashInfo.Elements("CASHINFO").FirstOrDefault();\n                        if (node == null)\n                            continue;\n\n                        Records.Add(new CashShopRecord\n                        {\n                            FilePath = file,\n                            Document = document,\n                            Container = container,\n                            Node = node,\n                            Group = groupName,\n                            Category = category\n                        });'''
+          if old_loop not in text: raise SystemExit('load loop missing')
+          text = text.replace(old_loop, new_loop, 1)
+
+          # 6) Main view resolves ProductID against every tier unique_id.
+          old_main = '''                var byUnique = Records\n                    .Where(x => x.UniqueId > 0)\n                    .GroupBy(x => x.UniqueId)\n                    .ToDictionary(x => x.Key, x => x.First());'''
+          new_main = '''                var byUnique = Records\n                    .SelectMany(record => record.Variants.Select(option => new\n                    {\n                        Id = ParseUInt(option.Element("unique_id")?.Value),\n                        Record = record\n                    }))\n                    .Where(x => x.Id > 0)\n                    .GroupBy(x => x.Id)\n                    .ToDictionary(x => x.Key, x => x.First().Record);'''
+          if old_main not in text: raise SystemExit('main map missing')
+          text = text.replace(old_main, new_main, 1)
+
+          # 7) Cards: show option count and add DELETE alongside EDIT/CLONE.
+          old_btns = '''            var edit = CreateEditorActionButton("EDIT");\n            edit.Size = new Size(84, 24);\n\n            var clone = CreateEditorActionButton("CLONE");\n            clone.Size = new Size(84, 24);'''
+          new_btns = '''            var edit = CreateEditorActionButton("EDIT");\n            edit.Size = new Size(64, 24);\n\n            var clone = CreateEditorActionButton("CLONE");\n            clone.Size = new Size(64, 24);\n\n            var delete = CreateEditorActionButton("DELETE");\n            delete.Size = new Size(68, 24);\n            delete.ForeColor = Color.FromArgb(245, 115, 115);\n\n            var optionsLabel = new Label\n            {\n                Text = record.VariantCount > 1 ? $"{record.VariantCount} PURCHASE OPTIONS" : "1 PURCHASE OPTION",\n                ForeColor = record.VariantCount > 1 ? Color.FromArgb(110, 190, 255) : CMuted,\n                Font = new Font("Segoe UI Semibold", 6.4F),\n                TextAlign = ContentAlignment.MiddleCenter\n            };'''
+          if old_btns not in text: raise SystemExit('card buttons missing')
+          text = text.replace(old_btns, new_btns, 1)
+
+          old_layout = '''                price.Location = new Point(6, 76);\n                price.Size = new Size(Math.Max(80, width - 12), 14);\n\n                int buttonY = Math.Max(94, height - edit.Height - 5);\n                edit.Location = new Point(6, buttonY);\n                clone.Location = new Point(\n                    Math.Max(edit.Right + 5, width - clone.Width - 6),\n                    buttonY);'''
+          new_layout = '''                price.Location = new Point(6, 76);\n                price.Size = new Size(Math.Max(80, width - 12), 14);\n                optionsLabel.Location = new Point(6, 90);\n                optionsLabel.Size = new Size(Math.Max(80, width - 12), 13);\n\n                int buttonY = Math.Max(106, height - edit.Height - 5);\n                int gap = 5;\n                int totalButtons = edit.Width + clone.Width + delete.Width + (gap * 2);\n                int startX = Math.Max(5, (width - totalButtons) / 2);\n                edit.Location = new Point(startX, buttonY);\n                clone.Location = new Point(edit.Right + gap, buttonY);\n                delete.Location = new Point(clone.Right + gap, buttonY);'''
+          if old_layout not in text: raise SystemExit('card layout missing')
+          text = text.replace(old_layout, new_layout, 1)
+
+          old_clone_handler = '''            clone.Click += (_, _) =>\n            {\n                CashShopRecord cloned = state.Service.CloneRecord(record);\n                OpenCashShopEditTab(state.Service, cloned, new XElement(cloned.Node));\n                RefreshCashShopBrowser(state);\n            };\n\n            card.Controls.AddRange(new Control[]\n            {\n                icon, badge, status, name, itemLabel, price, edit, clone\n            });'''
+          new_clone_handler = '''            clone.Click += (_, _) =>\n            {\n                CashShopRecord cloned = state.Service.CloneRecord(record);\n                OpenCashShopEditTab(state.Service, cloned, new XElement(cloned.Node));\n                RefreshCashShopBrowser(state);\n            };\n\n            delete.Click += (_, _) =>\n            {\n                DialogResult confirm = MessageBox.Show(\n                    $"Delete Cash Shop product '{record.Name}'?\\r\\n\\r\\n" +\n                    $"CashShop ID: {record.CashShopId}\\r\\n" +\n                    $"Purchase options: {record.VariantCount}\\r\\n\\r\\n" +\n                    "This removes the entire CashShopInformationCount group.",\n                    "Delete Cash Shop Product",\n                    MessageBoxButtons.YesNo,\n                    MessageBoxIcon.Warning);\n\n                if (confirm != DialogResult.Yes)\n                    return;\n\n                try\n                {\n                    state.Service.DeleteRecord(record);\n                    RefreshCashShopBrowser(state);\n                }\n                catch (Exception ex)\n                {\n                    ShowEditorError("Delete Cash Shop Product", ex);\n                }\n            };\n\n            card.Controls.AddRange(new Control[]\n            {\n                icon, badge, status, name, itemLabel, price, optionsLabel, edit, clone, delete\n            });'''
+          if old_clone_handler not in text: raise SystemExit('clone handler missing')
+          text = text.replace(old_clone_handler, new_clone_handler, 1)
+
+          # Slightly taller cards so three action buttons never clip.
+          text = text.replace('cardHeight = Math.Max(126, Math.Min(134, cardHeight));',
+                              'cardHeight = Math.Max(138, Math.Min(148, cardHeight));', 1)
+
+          # 8) Add purchase-options summary + manager button in edit/create screen.
+          marker = '''            form.Controls.AddRange(new Control[]\n            {\n                itemList,\n                itemPreview,\n                itemPreviewText,\n                selectItem,\n                addItem,\n                removeItem\n            });\n\n            var workingItems'''
+          add = '''            form.Controls.AddRange(new Control[]\n            {\n                itemList,\n                itemPreview,\n                itemPreviewText,\n                selectItem,\n                addItem,\n                removeItem\n            });\n\n            int optionY = y + 154;\n            var optionTitle = new Label\n            {\n                Text = "PURCHASE OPTIONS / PRICE TIERS",\n                ForeColor = CText,\n                Font = new Font("Segoe UI Semibold", 9F, FontStyle.Bold),\n                Location = new Point(16, optionY),\n                AutoSize = true\n            };\n\n            var optionSummary = new Label\n            {\n                ForeColor = Color.FromArgb(120, 190, 255),\n                Location = new Point(16, optionY + 26),\n                Size = new Size(590, 58),\n                AutoEllipsis = true\n            };\n\n            var manageOptions = CreateEditorActionButton("MANAGE OPTIONS");\n            manageOptions.Location = new Point(624, optionY + 24);\n            manageOptions.Size = new Size(146, 34);\n\n            form.Controls.AddRange(new Control[] { optionTitle, optionSummary, manageOptions });\n            form.Height = Math.Max(form.Height, optionY + 110);\n\n            void RefreshOptionSummary()\n            {\n                List<XElement> options = record.Variants.ToList();\n                optionSummary.Text = options.Count <= 1\n                    ? "1 option — the product has a single quantity / price."\n                    : $"{options.Count} options — " + string.Join("  |  ", options.Take(5).Select(x =>\n                        $"x{Math.Max(1, ParseInt(x.Element(\"nDispCount\")?.Value))} / C {ParseInt(x.Element(\"nRealSellingPrice\")?.Value):N0}"));\n            }\n\n            manageOptions.Click += (_, _) =>\n            {\n                if (OpenCashShopOptionsManager(service, record))\n                {\n                    RefreshOptionSummary();\n                    foreach (TabPage browserPage in editorTabs.TabPages)\n                        if (browserPage.Tag is CashShopBrowseState browser && ReferenceEquals(browser.Service, service))\n                            RefreshCashShopBrowser(browser);\n                }\n            };\n\n            var workingItems'''
+          if marker not in text: raise SystemExit('item section marker missing')
+          text = text.replace(marker, add, 1)
+
+          init_marker = '''            RefreshPreview();\n            RefreshIdValidation();\n\n            editorTabs.TabPages.Add(page);'''
+          init_new = '''            RefreshPreview();\n            RefreshIdValidation();\n            RefreshOptionSummary();\n\n            editorTabs.TabPages.Add(page);'''
+          if init_marker not in text: raise SystemExit('init marker missing')
+          text = text.replace(init_marker, init_new, 1)
+
+          # 9) Dedicated manager for alternate quantity/price tiers.
+          insert_at = text.index('        private uint? OpenCashShopIconPicker(')
+          manager = r'''        private bool OpenCashShopOptionsManager(CashShopService service, CashShopRecord record)
+        {
+            List<XElement> options = record.Variants.Select(x => new XElement(x)).ToList();
+            if (options.Count == 0)
+                options.Add(new XElement(record.Node));
+
+            using var dialog = new Form
+            {
+                Text = "Cash Shop Purchase Options / Price Tiers",
+                Size = new Size(930, 660),
+                StartPosition = FormStartPosition.CenterParent,
+                BackColor = CEditor,
+                ForeColor = CText,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MinimizeBox = false,
+                MaximizeBox = false
+            };
+
+            var title = new Label
+            {
+                Text = "PURCHASE OPTIONS / PRICE TIERS",
+                ForeColor = CText,
+                Font = new Font("Segoe UI Semibold", 12F, FontStyle.Bold),
+                Location = new Point(16, 14),
+                AutoSize = true
+            };
+            var hint = new Label
+            {
+                Text = "One Cash Shop card can contain several purchase choices: more quantity for a different price.",
+                ForeColor = CMuted,
+                Location = new Point(18, 42),
+                Size = new Size(860, 22)
+            };
+            var list = new ListBox
+            {
+                Location = new Point(16, 76),
+                Size = new Size(355, 470),
+                BackColor = Color.FromArgb(16, 16, 18),
+                ForeColor = CText,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+
+            int fx = 394;
+            var unique = AddBox("Unique Product ID", fx, 84, 190);
+            var enabled = AddBox("Enabled", fx + 210, 84, 110);
+            var displayCount = AddBox("Display Count", fx, 146, 150);
+            var standardPrice = AddBox("Standard Price", fx + 170, 146, 150);
+            var sellingPrice = AddBox("Selling Price", fx + 340, 146, 150);
+            var sale = AddBox("Sale %", fx, 208, 150);
+            var iconId = AddBox("Cash Shop Icon ID", fx + 170, 208, 150);
+            var name = AddBox("Name", fx, 270, 490);
+
+            var itemSummary = new Label
+            {
+                Text = "Items / quantity",
+                ForeColor = CText,
+                Font = new Font("Segoe UI Semibold", 8F),
+                Location = new Point(fx, 334),
+                AutoSize = true
+            };
+            var items = new ListBox
+            {
+                Location = new Point(fx, 354),
+                Size = new Size(490, 126),
+                BackColor = Color.FromArgb(16, 16, 18),
+                ForeColor = CText,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            dialog.Controls.Add(itemSummary);
+            dialog.Controls.Add(items);
+
+            var add = CreateEditorActionButton("ADD OPTION");
+            add.Location = new Point(16, 558); add.Size = new Size(108, 32);
+            var clone = CreateEditorActionButton("CLONE OPTION");
+            clone.Location = new Point(132, 558); clone.Size = new Size(116, 32);
+            var remove = CreateEditorActionButton("DELETE OPTION");
+            remove.Location = new Point(256, 558); remove.Size = new Size(115, 32);
+            remove.ForeColor = Color.FromArgb(245, 115, 115);
+            var save = CreateEditorActionButton("SAVE OPTIONS");
+            save.Location = new Point(752, 558); save.Size = new Size(132, 32);
+            dialog.Controls.AddRange(new Control[] { title, hint, list, add, clone, remove, save });
+
+            bool loadingFields = false;
+            int selected = 0;
+
+            void SyncAmounts(XElement option)
+            {
+                int amount = Math.Max(1, ParseInt(option.Element("nDispCount")?.Value));
+                foreach (XElement entry in option.Element("CashItems")?.Elements("Item") ?? Enumerable.Empty<XElement>())
+                    SetCashShopElement(entry, "Amount", amount.ToString(CultureInfo.InvariantCulture));
+            }
+
+            void PullSelected()
+            {
+                if (loadingFields || selected < 0 || selected >= options.Count) return;
+                XElement option = options[selected];
+                SetCashShopElement(option, "unique_id", unique.Text);
+                SetCashShopElement(option, "Enabled", enabled.Text);
+                SetCashShopElement(option, "nDispCount", displayCount.Text);
+                SetCashShopElement(option, "nStandardSellingPrice", standardPrice.Text);
+                SetCashShopElement(option, "nRealSellingPrice", sellingPrice.Text);
+                SetCashShopElement(option, "nSalePersent", sale.Text);
+                SetCashShopElement(option, "nIconID", iconId.Text);
+                SetCashShopElement(option, "Name", name.Text);
+                SyncAmounts(option);
+            }
+
+            void LoadSelected()
+            {
+                if (selected < 0 || selected >= options.Count) return;
+                loadingFields = true;
+                XElement option = options[selected];
+                unique.Text = option.Element("unique_id")?.Value ?? "0";
+                enabled.Text = option.Element("Enabled")?.Value ?? "0";
+                displayCount.Text = option.Element("nDispCount")?.Value ?? "1";
+                standardPrice.Text = option.Element("nStandardSellingPrice")?.Value ?? "0";
+                sellingPrice.Text = option.Element("nRealSellingPrice")?.Value ?? "0";
+                sale.Text = option.Element("nSalePersent")?.Value ?? "0";
+                iconId.Text = option.Element("nIconID")?.Value ?? "0";
+                name.Text = option.Element("Name")?.Value ?? string.Empty;
+                items.Items.Clear();
+                foreach (XElement entry in option.Element("CashItems")?.Elements("Item") ?? Enumerable.Empty<XElement>())
+                {
+                    uint itemId = ParseUInt(entry.Element("ItemId")?.Value);
+                    int amount = Math.Max(1, ParseInt(entry.Element("Amount")?.Value));
+                    items.Items.Add($"{itemId} x{amount} — {service.FindItem(itemId)?.Name ?? "Unknown Item"}");
+                }
+                loadingFields = false;
+            }
+
+            void RefreshList()
+            {
+                list.BeginUpdate(); list.Items.Clear();
+                for (int i = 0; i < options.Count; i++)
+                {
+                    XElement option = options[i];
+                    int count = Math.Max(1, ParseInt(option.Element("nDispCount")?.Value));
+                    int price = ParseInt(option.Element("nRealSellingPrice")?.Value);
+                    uint uid = ParseUInt(option.Element("unique_id")?.Value);
+                    list.Items.Add($"Option {i + 1}   •   x{count}   •   C {price:N0}   •   Product {uid}");
+                }
+                list.EndUpdate();
+                if (options.Count > 0)
+                {
+                    selected = Math.Clamp(selected, 0, options.Count - 1);
+                    list.SelectedIndex = selected;
+                }
+            }
+
+            list.SelectedIndexChanged += (_, _) =>
+            {
+                if (list.SelectedIndex < 0 || list.SelectedIndex == selected) return;
+                PullSelected();
+                selected = list.SelectedIndex;
+                LoadSelected();
+            };
+
+            displayCount.TextChanged += (_, _) =>
+            {
+                if (loadingFields) return;
+                PullSelected();
+                LoadSelected();
+                RefreshList();
+            };
+
+            add.Click += (_, _) =>
+            {
+                PullSelected();
+                XElement template = new XElement(options[Math.Clamp(selected, 0, options.Count - 1)]);
+                uint nextId = service.GetNextUniqueId();
+                HashSet<uint> local = options.Select(x => ParseUInt(x.Element("unique_id")?.Value)).ToHashSet();
+                while (local.Contains(nextId)) nextId++;
+                SetCashShopElement(template, "unique_id", nextId.ToString(CultureInfo.InvariantCulture));
+                SetCashShopElement(template, "Enabled", "0");
+                int nextCount = Math.Max(1, ParseInt(template.Element("nDispCount")?.Value)) + 1;
+                SetCashShopElement(template, "nDispCount", nextCount.ToString(CultureInfo.InvariantCulture));
+                SyncAmounts(template);
+                options.Add(template);
+                selected = options.Count - 1;
+                RefreshList(); LoadSelected();
+            };
+
+            clone.Click += (_, _) =>
+            {
+                PullSelected();
+                XElement copy = new XElement(options[Math.Clamp(selected, 0, options.Count - 1)]);
+                uint nextId = service.GetNextUniqueId();
+                HashSet<uint> local = options.Select(x => ParseUInt(x.Element("unique_id")?.Value)).ToHashSet();
+                while (local.Contains(nextId)) nextId++;
+                SetCashShopElement(copy, "unique_id", nextId.ToString(CultureInfo.InvariantCulture));
+                SetCashShopElement(copy, "Enabled", "0");
+                options.Add(copy);
+                selected = options.Count - 1;
+                RefreshList(); LoadSelected();
+            };
+
+            remove.Click += (_, _) =>
+            {
+                if (options.Count <= 1)
+                {
+                    MessageBox.Show("A product must keep at least one purchase option.", "Cash Shop Options", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                options.RemoveAt(Math.Clamp(selected, 0, options.Count - 1));
+                selected = Math.Clamp(selected, 0, options.Count - 1);
+                RefreshList(); LoadSelected();
+            };
+
+            save.Click += (_, _) =>
+            {
+                try
+                {
+                    PullSelected();
+                    service.SaveOptions(record, options);
+                    dialog.DialogResult = DialogResult.OK;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(ex.Message, "Save Cash Shop Options", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            };
+
+            RefreshList(); LoadSelected();
+            return dialog.ShowDialog(this) == DialogResult.OK;
+
+            TextBox AddBox(string label, int x, int y, int width)
+            {
+                dialog.Controls.Add(new Label { Text = label, ForeColor = CText, Location = new Point(x, y), Size = new Size(width, 18), Font = new Font("Segoe UI Semibold", 8F) });
+                var box = new TextBox { Location = new Point(x, y + 20), Size = new Size(width, 24), BackColor = Color.FromArgb(10, 10, 10), ForeColor = CText, BorderStyle = BorderStyle.FixedSingle };
+                dialog.Controls.Add(box);
+                return box;
+            }
+        }
+
+'''
+          text = text[:insert_at] + manager + text[insert_at:]
+
+          path.write_text(text, encoding='utf-8-sig')
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "DRW Work Tool/Form1.CashShopEditor.cs"
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Group CashShop purchase tiers and add delete controls"
+          git push
