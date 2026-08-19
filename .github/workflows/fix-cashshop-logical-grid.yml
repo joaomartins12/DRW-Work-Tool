@@ -1,0 +1,293 @@
+name: Fix CashShop Logical Grid
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch CashShop logical grid, DDS resolver and compact cards
+        shell: python
+        run: |
+          from pathlib import Path
+
+          # 1) Fix InterfaceIconMapBuilder: CashShop IDs are logical 00..99 => 10x10.
+          builder = Path('DRW Work Tool/Core/InterfaceIconMapBuilder.cs')
+          text = builder.read_text(encoding='utf-8-sig')
+          text = text.replace(
+              '- cashshopG_PPP   -> base = GPPP00; mapeia no máximo 100 slots lógicos por atlas',
+              '- cashshopG_PPP   -> base = GPPP00; mapeia 100 slots numa grelha lógica 10x10 dentro do atlas físico')
+
+          old_cash = '''                int baseId = int.Parse($"{g}{p}00");
+                int count = Math.Min(atlas.Capacity, 100);
+
+                if (atlas.Capacity > 100)
+                {
+                    immediateWarning =
+                        $"o atlas físico tem {atlas.Capacity} slots, mas a janela lógica cashshop foi limitada a 100 IDs ({baseId}..{baseId + count - 1}).";
+                }
+
+                return new AtlasRule
+                {
+                    Category = "CashShop",
+                    BaseId = baseId,
+                    Count = count,
+                    Note = $"cashshop{g}_{p} => {baseId}..{baseId + count - 1}"
+                };'''
+          new_cash = '''                int baseId = int.Parse($"{g}{p}00");
+                int count = Math.Min(atlas.Capacity, 100);
+
+                return new AtlasRule
+                {
+                    Category = "CashShop",
+                    BaseId = baseId,
+                    Count = count,
+                    Note = $"cashshop{g}_{p} => {baseId}..{baseId + count - 1} | LogicalGrid=10x10 | PhysicalGrid={atlas.Columns}x{atlas.Rows}"
+                };'''
+          if old_cash not in text:
+              raise SystemExit('CashShop rule block not found')
+          text = text.replace(old_cash, new_cash, 1)
+
+          old_coords = '''                int column = i % atlas.Columns;
+                int row = i / atlas.Columns;
+
+                document.Icons.Add('''
+          new_coords = '''                // CashShop IDs encode a logical 00..99 slot. The source DDS files are
+                // physically 15x15 (480x480), but CashShop addressing is 10 columns.
+                int logicalColumns = rule.Category.Equals("CashShop", StringComparison.OrdinalIgnoreCase)
+                    ? 10
+                    : atlas.Columns;
+                int column = i % logicalColumns;
+                int row = i / logicalColumns;
+
+                document.Icons.Add('''
+          if old_coords not in text:
+              raise SystemExit('AddEntries coordinate block not found')
+          text = text.replace(old_coords, new_coords, 1)
+          builder.write_text(text, encoding='utf-8')
+
+          # 2) Fix loader, even when InterfaceIconMap.json was generated with the old 15-column mapping.
+          loader = Path('DRW Work Tool/Core/CashShopDdsIconCache.cs')
+          text = loader.read_text(encoding='utf-8-sig')
+          old_source = '''                Bitmap atlasBitmap = GetAtlas(ddsPath);
+                var source = new Rectangle(mapping.X, mapping.Y, mapping.Width, mapping.Height);
+
+                if (source.Width <= 0 ||'''
+          new_source = '''                Bitmap atlasBitmap = GetAtlas(ddsPath);
+
+                int sourceX = mapping.X;
+                int sourceY = mapping.Y;
+                int sourceWidth = mapping.Width > 0 ? mapping.Width : atlas.TileWidth;
+                int sourceHeight = mapping.Height > 0 ? mapping.Height : atlas.TileHeight;
+
+                // Cash Shop atlas files are physically 15x15, but their nIconID namespace
+                // uses the final two digits as a logical 10x10 slot (00..99).
+                // Recalculate here so an older InterfaceIconMap.json cannot crop a wrong tile.
+                if (mapping.Category.Equals("CashShop", StringComparison.OrdinalIgnoreCase) ||
+                    mapping.Atlas.StartsWith("cashshop", StringComparison.OrdinalIgnoreCase))
+                {
+                    int logicalSlot = (int)(iconId % 100u);
+                    int tileWidth = atlas.TileWidth > 0 ? atlas.TileWidth : sourceWidth;
+                    int tileHeight = atlas.TileHeight > 0 ? atlas.TileHeight : sourceHeight;
+                    sourceX = (logicalSlot % 10) * tileWidth;
+                    sourceY = (logicalSlot / 10) * tileHeight;
+                    sourceWidth = tileWidth;
+                    sourceHeight = tileHeight;
+                }
+
+                var source = new Rectangle(sourceX, sourceY, sourceWidth, sourceHeight);
+
+                if (source.Width <= 0 ||'''
+          if old_source not in text:
+              raise SystemExit('CashShop loader source rectangle block not found')
+          text = text.replace(old_source, new_source, 1)
+          loader.write_text(text, encoding='utf-8')
+
+          # 3) Compact storefront cards so 3x3 always fits without clipping controls.
+          editor = Path('DRW Work Tool/Form1.CashShopEditor.cs')
+          text = editor.read_text(encoding='utf-8-sig')
+          text = text.replace('                Height = 176,\n                BackColor = CEditor', '                Height = 168,\n                BackColor = CEditor', 1)
+          text = text.replace('                Location = new Point(8, 132),', '                Location = new Point(8, 126),', 1)
+          text = text.replace('                Location = new Point(10, 160),', '                Location = new Point(10, 153),', 1)
+          text = text.replace('                next.Location = new Point(Math.Max(350, header.ClientSize.Width - next.Width - 8), 134);\n                pageInfo.Location = new Point(next.Left - pageInfo.Width - 6, 134);\n                previous.Location = new Point(pageInfo.Left - previous.Width - 6, 134);',
+                              '                next.Location = new Point(Math.Max(350, header.ClientSize.Width - next.Width - 8), 126);\n                pageInfo.Location = new Point(next.Left - pageInfo.Width - 6, 126);\n                previous.Location = new Point(pageInfo.Left - previous.Width - 6, 126);', 1)
+
+          start = text.index('        private Control CreateCashShopCard(CashShopBrowseState state, CashShopRecord record)')
+          end = text.index('        private void ResizeCashShopCards(CashShopBrowseState state)', start)
+          replacement = r'''        private Control CreateCashShopCard(CashShopBrowseState state, CashShopRecord record)
+        {
+            var card = new Panel
+            {
+                Width = 226,
+                Height = 126,
+                BackColor = Color.FromArgb(32, 32, 40),
+                Margin = new Padding(4),
+                Tag = record
+            };
+
+            card.Paint += (_, e) =>
+            {
+                using var p = new Pen(Color.FromArgb(72, 72, 84));
+                e.Graphics.DrawRectangle(p, 0, 0, card.Width - 1, card.Height - 1);
+            };
+
+            Image? preview = CashShopDdsIconCache.TryLoad(record.IconId);
+
+            var icon = new PictureBox
+            {
+                Size = new Size(40, 40),
+                BackColor = Color.FromArgb(8, 8, 12),
+                SizeMode = PictureBoxSizeMode.Zoom,
+                Image = preview
+            };
+
+            var badge = new Label
+            {
+                Text = record.Badge,
+                ForeColor = Color.FromArgb(255, 205, 70),
+                Font = new Font("Segoe UI Semibold", 6.8F, FontStyle.Bold),
+                Size = new Size(58, 15),
+                Visible = !string.IsNullOrWhiteSpace(record.Badge)
+            };
+
+            var status = new Label
+            {
+                Text = record.Active ? "ACTIVE" : "DISABLED",
+                ForeColor = record.Active ? Color.FromArgb(100, 230, 130) : Color.FromArgb(240, 95, 95),
+                Font = new Font("Segoe UI Semibold", 6.8F, FontStyle.Bold),
+                Size = new Size(70, 15),
+                TextAlign = ContentAlignment.MiddleRight
+            };
+
+            var name = new Label
+            {
+                Text = string.IsNullOrWhiteSpace(record.Name) ? $"Cash Shop {record.CashShopId}" : record.Name,
+                ForeColor = CText,
+                Font = new Font("Segoe UI Semibold", 7.6F, FontStyle.Bold),
+                TextAlign = ContentAlignment.TopCenter,
+                AutoEllipsis = true
+            };
+
+            string itemText = record.Items.Count == 0
+                ? "No ItemList item"
+                : string.Join(", ", record.Items.Take(2).Select(x => $"{x.ItemId} x{x.Amount}"));
+
+            var itemLabel = new Label
+            {
+                Text = itemText,
+                ForeColor = CMuted,
+                Font = new Font("Segoe UI", 6.8F),
+                TextAlign = ContentAlignment.MiddleCenter,
+                AutoEllipsis = true
+            };
+
+            var price = new Label
+            {
+                Text = $"C {record.Price:N0} • ID {record.CashShopId} • P {record.UniqueId}",
+                ForeColor = Color.FromArgb(245, 205, 80),
+                Font = new Font("Segoe UI", 6.7F),
+                TextAlign = ContentAlignment.MiddleCenter,
+                AutoEllipsis = true
+            };
+
+            var edit = CreateEditorActionButton("EDIT");
+            var clone = CreateEditorActionButton("CLONE");
+            edit.Size = new Size(88, 21);
+            clone.Size = new Size(88, 21);
+
+            void LayoutCard()
+            {
+                int width = card.ClientSize.Width;
+                int height = card.ClientSize.Height;
+
+                icon.Location = new Point(Math.Max(4, (width - icon.Width) / 2), 4);
+                badge.Location = new Point(7, 4);
+                status.Location = new Point(Math.Max(7, width - status.Width - 7), 4);
+
+                name.Location = new Point(7, 45);
+                name.Size = new Size(Math.Max(80, width - 14), 26);
+
+                itemLabel.Location = new Point(7, 71);
+                itemLabel.Size = new Size(Math.Max(80, width - 14), 14);
+
+                price.Location = new Point(7, 85);
+                price.Size = new Size(Math.Max(80, width - 14), 14);
+
+                int buttonY = Math.Max(100, height - 24);
+                edit.Location = new Point(7, buttonY);
+                clone.Location = new Point(Math.Max(edit.Right + 6, width - clone.Width - 7), buttonY);
+            }
+
+            card.Resize += (_, _) => LayoutCard();
+
+            edit.Click += (_, _) =>
+                OpenCashShopEditTab(state.Service, record, new XElement(record.Node));
+
+            clone.Click += (_, _) =>
+            {
+                CashShopRecord cloned = state.Service.CloneRecord(record);
+                OpenCashShopEditTab(state.Service, cloned, new XElement(cloned.Node));
+                RefreshCashShopBrowser(state);
+            };
+
+            card.Controls.AddRange(new Control[]
+            {
+                icon, badge, status, name, itemLabel, price, edit, clone
+            });
+
+            LayoutCard();
+            return card;
+        }
+
+'''
+          text = text[:start] + replacement + text[end:]
+
+          resize_start = text.index('        private void ResizeCashShopCards(CashShopBrowseState state)')
+          resize_end = text.index('        private void OpenCashShopEditTab(', resize_start)
+          resize_replacement = r'''        private void ResizeCashShopCards(CashShopBrowseState state)
+        {
+            const int columns = 3;
+            const int rows = 3;
+            const int horizontalMarginPerCard = 8;
+            const int verticalMarginPerCard = 8;
+
+            int usableWidth = Math.Max(600, state.Cards.ClientSize.Width - state.Cards.Padding.Horizontal);
+            int cardWidth = Math.Max(180,
+                (usableWidth - (columns * horizontalMarginPerCard) - 2) / columns);
+
+            int usableHeight = Math.Max(360, state.Cards.ClientSize.Height - state.Cards.Padding.Vertical);
+            int cardHeight = (usableHeight - (rows * verticalMarginPerCard) - 2) / rows;
+            cardHeight = Math.Max(122, Math.Min(136, cardHeight));
+
+            foreach (Control card in state.Cards.Controls)
+            {
+                card.Width = cardWidth;
+                card.Height = cardHeight;
+            }
+        }
+
+'''
+          text = text[:resize_start] + resize_replacement + text[resize_end:]
+          editor.write_text(text, encoding='utf-8')
+
+      - name: Commit fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "DRW Work Tool/Core/InterfaceIconMapBuilder.cs" "DRW Work Tool/Core/CashShopDdsIconCache.cs" "DRW Work Tool/Form1.CashShopEditor.cs"
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Fix CashShop 10x10 icon grid and card clipping"
+            git push origin master
+          fi
