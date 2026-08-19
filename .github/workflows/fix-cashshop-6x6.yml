@@ -1,0 +1,254 @@
+name: Fix CashShop 6x6 Atlas
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply real CashShop atlas geometry
+        shell: python
+        run: |
+          from pathlib import Path
+
+          # 1) ImageDatabaseIndexBuilder: cashshop atlases are 6x6 cells of 80x80.
+          p = Path('DRW Work Tool/Core/ImageDatabaseIndexBuilder.cs')
+          text = p.read_text(encoding='utf-8-sig')
+          old = '''                int columns = width > 0 ? width / 32 : 0;
+                int rows = height > 0 ? height / 32 : 0;
+
+                result.Add(
+                    new InterfaceAtlasEntry
+                    {
+                        Name = group.Key,
+                        Width = width,
+                        Height = height,
+                        TileWidth = 32,
+                        TileHeight = 32,
+                        Columns = columns,
+                        Rows = rows,
+                        Capacity = columns * rows,'''
+          new = '''                bool isCashShop = group.Key.StartsWith(
+                    "cashshop",
+                    StringComparison.OrdinalIgnoreCase);
+
+                // Cash Shop atlases are 480x480 and contain 6x6 product icons.
+                // Their cells are 80x80. TGA guide atlases confirm the sequential
+                // row-major IDs: xx00 at slot 0, xx10 at slot 10, xx20 at slot 20,
+                // xx30 at slot 30. Do not treat these as generic 32x32 atlases.
+                int tileWidth = isCashShop ? 80 : 32;
+                int tileHeight = isCashShop ? 80 : 32;
+                int columns = width > 0 ? width / tileWidth : 0;
+                int rows = height > 0 ? height / tileHeight : 0;
+
+                result.Add(
+                    new InterfaceAtlasEntry
+                    {
+                        Name = group.Key,
+                        Width = width,
+                        Height = height,
+                        TileWidth = tileWidth,
+                        TileHeight = tileHeight,
+                        Columns = columns,
+                        Rows = rows,
+                        Capacity = columns * rows,'''
+          if old not in text:
+              raise SystemExit('ImageDatabaseIndexBuilder atlas geometry block not found')
+          p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # 2) InterfaceIconMapBuilder: each cashshop atlas maps exactly 36 sequential IDs.
+          p = Path('DRW Work Tool/Core/InterfaceIconMapBuilder.cs')
+          text = p.read_text(encoding='utf-8-sig')
+          text = text.replace(
+              '- cashshopG_PPP   -> base = GPPP00; 100 IDs lógicos (00..99) numa grelha 10x10; atlas físico pode ser 15x15',
+              '- cashshopG_PPP   -> base = GPPP00; 36 slots sequenciais (00..35) numa grelha física 6x6 de 80x80')
+
+          old = '''                int baseId = int.Parse($"{g}{p}00");
+                int count = Math.Min(atlas.Capacity, 100);
+
+                if (count < 100)
+                {
+                    immediateWarning =
+                        $"CashShop necessita de 100 slots lógicos, mas o atlas só permite mapear {count}.";
+                }
+
+                return new AtlasRule
+                {
+                    Category = "CashShop",
+                    BaseId = baseId,
+                    Count = count,
+                    LogicalColumns = 10,
+                    Note = $"cashshop{g}_{p} => {baseId}..{baseId + count - 1} | LogicalGrid=10x10 | PhysicalGrid={atlas.Columns}x{atlas.Rows}"
+                };'''
+          new = '''                int baseId = int.Parse($"{g}{p}00");
+                const int expectedColumns = 6;
+                const int expectedRows = 6;
+                const int expectedTile = 80;
+                const int expectedCount = 36;
+
+                if (atlas.Width != 480 || atlas.Height != 480 ||
+                    atlas.Columns != expectedColumns || atlas.Rows != expectedRows ||
+                    atlas.TileWidth != expectedTile || atlas.TileHeight != expectedTile)
+                {
+                    immediateWarning =
+                        $"CashShop atlas esperado 480x480 / 6x6 / 80x80; índice atual: " +
+                        $"{atlas.Width}x{atlas.Height} / {atlas.Columns}x{atlas.Rows} / " +
+                        $"{atlas.TileWidth}x{atlas.TileHeight}. Executa Synchronize/Reajuste para reconstruir o índice.";
+                }
+
+                return new AtlasRule
+                {
+                    Category = "CashShop",
+                    BaseId = baseId,
+                    Count = expectedCount,
+                    LogicalColumns = expectedColumns,
+                    TileWidthOverride = expectedTile,
+                    TileHeightOverride = expectedTile,
+                    Note = $"cashshop{g}_{p} => {baseId}..{baseId + expectedCount - 1} | Grid=6x6 | Tile=80x80"
+                };'''
+          if old not in text:
+              raise SystemExit('InterfaceIconMapBuilder CashShop rule block not found')
+          text = text.replace(old, new, 1)
+
+          old2 = '''            int count = Math.Min(rule.Count, atlas.Capacity);
+            int columns = rule.LogicalColumns > 0 ? rule.LogicalColumns : atlas.Columns;
+
+            for (int i = 0; i < count; i++)
+            {
+                int column = i % columns;
+                int row = i / columns;
+
+                int x = column * atlas.TileWidth;
+                int y = row * atlas.TileHeight;
+
+                if (x + atlas.TileWidth > atlas.Width || y + atlas.TileHeight > atlas.Height)
+                    break;
+
+                document.Icons.Add(
+                    new InterfaceIconMapEntry
+                    {
+                        Id = (rule.BaseId + i).ToString(),
+                        Atlas = atlas.Name,
+                        X = x,
+                        Y = y,
+                        Width = atlas.TileWidth,
+                        Height = atlas.TileHeight,'''
+          new2 = '''            int count = rule.Count;
+            int columns = rule.LogicalColumns > 0 ? rule.LogicalColumns : atlas.Columns;
+            int tileWidth = rule.TileWidthOverride > 0 ? rule.TileWidthOverride : atlas.TileWidth;
+            int tileHeight = rule.TileHeightOverride > 0 ? rule.TileHeightOverride : atlas.TileHeight;
+
+            for (int i = 0; i < count; i++)
+            {
+                int column = i % columns;
+                int row = i / columns;
+
+                int x = column * tileWidth;
+                int y = row * tileHeight;
+
+                if (x + tileWidth > atlas.Width || y + tileHeight > atlas.Height)
+                    break;
+
+                document.Icons.Add(
+                    new InterfaceIconMapEntry
+                    {
+                        Id = (rule.BaseId + i).ToString(),
+                        Atlas = atlas.Name,
+                        X = x,
+                        Y = y,
+                        Width = tileWidth,
+                        Height = tileHeight,'''
+          if old2 not in text:
+              raise SystemExit('InterfaceIconMapBuilder AddEntries block not found')
+          text = text.replace(old2, new2, 1)
+
+          old3 = '''            public int Count { get; init; }
+            public int LogicalColumns { get; init; }
+            public string Note { get; init; } = string.Empty;'''
+          new3 = '''            public int Count { get; init; }
+            public int LogicalColumns { get; init; }
+            public int TileWidthOverride { get; init; }
+            public int TileHeightOverride { get; init; }
+            public string Note { get; init; } = string.Empty;'''
+          if old3 not in text:
+              raise SystemExit('InterfaceIconMapBuilder AtlasRule block not found')
+          p.write_text(text.replace(old3, new3, 1), encoding='utf-8')
+
+          # 3) DDS loader: resolve slot directly from atlas filename/base and crop 80x80 in 6 columns.
+          p = Path('DRW Work Tool/Core/CashShopDdsIconCache.cs')
+          text = p.read_text(encoding='utf-8-sig')
+          text = text.replace(
+              '    /// CashShop atlases are physically 15x15 (480x480), while nIconID uses\n    /// a logical 10x10 address in the final two digits (00..99).',
+              '    /// CashShop atlases are 480x480 with a physical 6x6 grid of 80x80 cells.\n    /// IDs are sequential row-major slots 00..35 inside each cashshopG_PPP atlas.')
+
+          old = '''                int sourceWidth = atlas.TileWidth > 0 ? atlas.TileWidth : mapping.Width;
+                int sourceHeight = atlas.TileHeight > 0 ? atlas.TileHeight : mapping.Height;
+                int sourceX = mapping.X;
+                int sourceY = mapping.Y;
+
+                // IMPORTANT:
+                // cashshopG_PPP.dds is 480x480 / 15x15 physically, but the CashShop ID
+                // namespace is GPPP00..GPPP99. Therefore the two trailing digits are a
+                // logical 10x10 slot, NOT a row-major index using atlas.Columns (15).
+                // Recalculate here so even an old InterfaceIconMap.json remains usable.
+                if (mapping.Category.Equals("CashShop", StringComparison.OrdinalIgnoreCase) ||
+                    mapping.Atlas.StartsWith("cashshop", StringComparison.OrdinalIgnoreCase))
+                {
+                    int logicalSlot = (int)(iconId % 100u);
+                    sourceX = (logicalSlot % 10) * sourceWidth;
+                    sourceY = (logicalSlot / 10) * sourceHeight;
+                }
+
+                var source = new Rectangle(sourceX, sourceY, sourceWidth, sourceHeight);'''
+          new = '''                int sourceWidth = atlas.TileWidth > 0 ? atlas.TileWidth : mapping.Width;
+                int sourceHeight = atlas.TileHeight > 0 ? atlas.TileHeight : mapping.Height;
+                int sourceX = mapping.X;
+                int sourceY = mapping.Y;
+
+                if (mapping.Category.Equals("CashShop", StringComparison.OrdinalIgnoreCase) ||
+                    mapping.Atlas.StartsWith("cashshop", StringComparison.OrdinalIgnoreCase))
+                {
+                    // TGA guide files prove the real geometry: 6 columns x 6 rows,
+                    // 80x80 pixels per cell. IDs advance sequentially row-major.
+                    // Example: slot 10 => column 4,row 1; slot 20 => column 2,row 3;
+                    // slot 30 => column 0,row 5. These positions match the printed
+                    // xx10/xx20/xx30 labels exactly.
+                    int slot = (int)(iconId % 100u);
+                    if (slot < 0 || slot >= 36)
+                    {
+                        Cache(iconId, null);
+                        return null;
+                    }
+
+                    sourceWidth = 80;
+                    sourceHeight = 80;
+                    sourceX = (slot % 6) * sourceWidth;
+                    sourceY = (slot / 6) * sourceHeight;
+                }
+
+                var source = new Rectangle(sourceX, sourceY, sourceWidth, sourceHeight);'''
+          if old not in text:
+              raise SystemExit('CashShopDdsIconCache geometry block not found')
+          p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+      - name: Commit fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "DRW Work Tool/Core/ImageDatabaseIndexBuilder.cs" "DRW Work Tool/Core/InterfaceIconMapBuilder.cs" "DRW Work Tool/Core/CashShopDdsIconCache.cs"
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Fix CashShop atlas geometry to verified 6x6 80px grid"
+            git push origin master
+          fi
