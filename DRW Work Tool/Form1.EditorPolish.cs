@@ -17,12 +17,6 @@ namespace DRW_Work_Tool
         private Control? _cloneTemplateLayoutHost;
         private bool _editorPolishInitialized;
 
-        protected override void OnActivated(EventArgs e)
-        {
-            base.OnActivated(e);
-            InitializeEditorPolish();
-        }
-
         private void InitializeEditorPolish()
         {
             if (_editorPolishInitialized || editorTabs == null)
