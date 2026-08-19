@@ -1,0 +1,107 @@
+name: Fix Achievement Router
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Route Achieve.xml directly to visual editor
+        shell: python
+        run: |
+          from pathlib import Path
+
+          editor = Path("DRW Work Tool/Form1.Editor.cs")
+          text = editor.read_text(encoding="utf-8")
+
+          marker = '''            if (xmlFileName.Equals(
+                    "Buff.xml",
+                    StringComparison.OrdinalIgnoreCase))
+            {'''
+
+          route = '''            if (xmlFileName.Equals(
+                    "Achieve.xml",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                if (existing != null)
+                {
+                    string stateType =
+                        existing.Tag?.GetType().Name
+                        ?? string.Empty;
+
+                    if (stateType.Contains(
+                            "AchievementBrowseState",
+                            StringComparison.Ordinal) ||
+                        stateType.Contains(
+                            "AchievementLoadingState",
+                            StringComparison.Ordinal))
+                    {
+                        editorTabs.SelectedTab = existing;
+                        return;
+                    }
+
+                    editorTabs.TabPages.Remove(existing);
+                    existing.Dispose();
+                }
+
+                OpenAchievementBrowser(xmlPath);
+                return;
+            }
+
+'''
+
+          if route not in text:
+              if marker not in text:
+                  raise SystemExit("Buff.xml route marker not found")
+              text = text.replace(marker, route + marker, 1)
+
+          editor.write_text(text, encoding="utf-8")
+
+          integration = Path("DRW Work Tool/Form1.AchievementIntegration.cs")
+          itext = integration.read_text(encoding="utf-8")
+
+          start = itext.index('        private void RefreshAchievementIntegration()')
+          end = itext.index('        private void EnsureAchievementImportButton', start)
+
+          replacement = '''        private void RefreshAchievementIntegration()
+        {
+            if (editorTabs == null || editorTabs.IsDisposed)
+                return;
+
+            TabPage? selected = editorTabs.SelectedTab;
+            if (selected == null || selected.IsDisposed)
+                return;
+
+            // Achievement XML routing now lives in OpenXmlEditor together with
+            // Skill/Buff/Digimon special editors. This integration helper only
+            // keeps backward-compatible database button support on the entity tab.
+            if (selected.Tag is EntityTabState entityState &&
+                entityState.Entity.Equals("Achieve", StringComparison.OrdinalIgnoreCase))
+            {
+                EnsureAchievementImportButton(selected);
+            }
+        }
+
+'''
+
+          itext = itext[:start] + replacement + itext[end:]
+          integration.write_text(itext, encoding="utf-8")
+
+      - name: Commit router fix and remove temporary workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "DRW Work Tool/Form1.Editor.cs" "DRW Work Tool/Form1.AchievementIntegration.cs"
+          git rm .github/workflows/temporary-fix-achievement-router.yml
+          git commit -m "Route Achieve.xml directly to visual Achievement editor"
+          git push origin master
