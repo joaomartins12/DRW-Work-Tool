@@ -1,0 +1,285 @@
+name: Fix Achievement Open And Icons
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch Achievement routing loading and icon rendering
+        shell: python
+        run: |
+          from pathlib import Path
+
+          # 1) Route Achieve.xml directly in the central router.
+          editor = Path("DRW Work Tool/Form1.Editor.cs")
+          text = editor.read_text(encoding="utf-8")
+          marker = '''            if (xmlFileName.Equals(
+                    "Buff.xml",
+                    StringComparison.OrdinalIgnoreCase))
+            {'''
+          route = '''            if (xmlFileName.Equals(
+                    "Achieve.xml",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                if (existing != null)
+                {
+                    string stateType =
+                        existing.Tag?.GetType().Name
+                        ?? string.Empty;
+
+                    if (stateType.Contains(
+                            "AchievementBrowseState",
+                            StringComparison.Ordinal) ||
+                        stateType.Contains(
+                            "AchievementLoadingState",
+                            StringComparison.Ordinal))
+                    {
+                        editorTabs.SelectedTab = existing;
+                        return;
+                    }
+
+                    editorTabs.TabPages.Remove(existing);
+                    existing.Dispose();
+                }
+
+                OpenAchievementBrowser(xmlPath);
+                return;
+            }
+
+'''
+          if '"Achieve.xml"' not in text[text.index('private void OpenXmlEditor'):text.index('private async void OpenItemListBrowser')]:
+              if marker not in text:
+                  raise SystemExit("Buff router marker not found")
+              text = text.replace(marker, route + marker, 1)
+          editor.write_text(text, encoding="utf-8")
+
+          # 2) Make Achievement integration passive: DB button only.
+          integration = Path("DRW Work Tool/Form1.AchievementIntegration.cs")
+          itext = integration.read_text(encoding="utf-8")
+          start = itext.index('        private void RefreshAchievementIntegration()')
+          end = itext.index('        private void EnsureAchievementImportButton', start)
+          replacement = '''        private void RefreshAchievementIntegration()
+        {
+            if (editorTabs == null || editorTabs.IsDisposed)
+                return;
+
+            TabPage? selected = editorTabs.SelectedTab;
+            if (selected == null || selected.IsDisposed)
+                return;
+
+            // Achieve.xml is routed directly by OpenXmlEditor, exactly like
+            // Skill.xml and Buff.xml. Never switch tabs from this handler.
+            if (selected.Tag is EntityTabState entityState &&
+                entityState.Entity.Equals("Achieve", StringComparison.OrdinalIgnoreCase))
+            {
+                EnsureAchievementImportButton(selected);
+            }
+        }
+
+'''
+          itext = itext[:start] + replacement + itext[end:]
+          integration.write_text(itext, encoding="utf-8")
+
+          # 3) Achievement browser: real loading, responsive card rendering and lazy sicon icons.
+          achieve = Path("DRW Work Tool/Form1.AchievementEditor.cs")
+          a = achieve.read_text(encoding="utf-8")
+
+          # Loading marker state (safe if already present from an older patch).
+          browse_marker = '''        private sealed class AchievementBrowseState
+        {'''
+          loading_state = '''        private sealed class AchievementLoadingState
+        {
+            public required string FilePath { get; init; }
+        }
+
+'''
+          if 'private sealed class AchievementLoadingState' not in a:
+              a = a.replace(browse_marker, loading_state + browse_marker, 1)
+
+          # Add icon timer to browser state.
+          state_old = '''            public required Label Count { get; init; }
+            public int PageIndex { get; set; }
+            public List<XElement> Filtered { get; set; } = new();'''
+          state_new = '''            public required Label Count { get; init; }
+            public required System.Windows.Forms.Timer IconTimer { get; init; }
+            public int PageIndex { get; set; }
+            public List<XElement> Filtered { get; set; } = new();'''
+          if state_new not in a:
+              if state_old not in a:
+                  raise SystemExit("AchievementBrowseState marker not found")
+              a = a.replace(state_old, state_new, 1)
+
+          open_old = '''            var page = CreateDarkTab("Achieve.xml");
+            page.Name = full;
+            page.Controls.Add(new EditorLoadingView(
+                "Loading Achievement Database",
+                "Reading titles, achievement icons, Buff.xml and related Quest.xml entries."));
+            editorTabs.TabPages.Add(page);
+            editorTabs.SelectedTab = page;
+            await System.Threading.Tasks.Task.Yield();
+
+            try
+            {
+                BuildAchievementBrowser(page, new AchievementService(full));
+            }'''
+          open_new = '''            var page = CreateDarkTab("Achieve.xml");
+            page.Name = full;
+            page.Tag = new AchievementLoadingState { FilePath = full };
+            var loading = new EditorLoadingView(
+                "Loading Achievement Database",
+                "Reading Achieve.xml, Buff.xml, title Quest.xml links and preparing sicon01-sicon07 previews.");
+            page.Controls.Add(loading);
+            editorTabs.TabPages.Add(page);
+            editorTabs.SelectedTab = page;
+            await System.Threading.Tasks.Task.Yield();
+
+            try
+            {
+                AchievementService service =
+                    await System.Threading.Tasks.Task.Run(() => new AchievementService(full));
+
+                if (page.IsDisposed)
+                    return;
+
+                BuildAchievementBrowser(page, service);
+            }'''
+          if open_new not in a:
+              if open_old not in a:
+                  raise SystemExit("OpenAchievementBrowser block not found")
+              a = a.replace(open_old, open_new, 1)
+
+          # Build browser with icon timer and scroll hooks.
+          state_build_old = '''            var state = new AchievementBrowseState { Service = service, Results = results, Search = search, Count = count };
+            page.Tag = state;'''
+          state_build_new = '''            var iconTimer = new System.Windows.Forms.Timer { Interval = 70 };
+            var state = new AchievementBrowseState
+            {
+                Service = service,
+                Results = results,
+                Search = search,
+                Count = count,
+                IconTimer = iconTimer
+            };
+            page.Tag = state;
+
+            iconTimer.Tick += (_, _) =>
+            {
+                iconTimer.Stop();
+                LoadVisibleAchievementIcons(state);
+            };
+
+            results.Scroll += (_, _) =>
+            {
+                iconTimer.Stop();
+                iconTimer.Start();
+            };
+
+            results.MouseWheel += (_, _) =>
+            {
+                iconTimer.Stop();
+                iconTimer.Start();
+            };
+
+            page.Disposed += (_, _) => iconTimer.Dispose();'''
+          if state_build_new not in a:
+              if state_build_old not in a:
+                  raise SystemExit("Achievement browse state construction marker not found")
+              a = a.replace(state_build_old, state_build_new, 1)
+
+          # Render fewer controls first; lazy icons make UI paint immediately.
+          a = a.replace('''            foreach (XElement node in state.Filtered.Take(300))
+                state.Results.Controls.Add(CreateAchievementCard(state, node));''', '''            foreach (XElement node in state.Filtered.Take(60))
+                state.Results.Controls.Add(CreateAchievementCard(state, node));''', 1)
+
+          resume_old = '''            state.Count.Text = $"Results: {state.Filtered.Count:N0} / {state.Service.Records.Count:N0}";
+            ResizeAchievementCards(state.Results);'''
+          resume_new = '''            state.Count.Text = $"Results: {state.Filtered.Count:N0} / {state.Service.Records.Count:N0}" +
+                (state.Filtered.Count > 60 ? " • showing first 60" : string.Empty);
+            ResizeAchievementCards(state.Results);
+            state.IconTimer.Stop();
+            state.IconTimer.Start();'''
+          if resume_new not in a:
+              if resume_old not in a:
+                  raise SystemExit("Achievement refresh tail marker not found")
+              a = a.replace(resume_old, resume_new, 1)
+
+          icon_old = '''            var icon = new PictureBox { Location = new Point(12,12), Size = new Size(78,78), BackColor = Color.Black,
+                SizeMode = PictureBoxSizeMode.Zoom, Image = ImageDatabasePreview.TryLoadInterfaceIcon(iconId, "Achieve") };'''
+          icon_new = '''            var icon = new PictureBox
+            {
+                Location = new Point(12,12),
+                Size = new Size(78,78),
+                BackColor = Color.Black,
+                SizeMode = PictureBoxSizeMode.Zoom,
+                Tag = iconId
+            };'''
+          if icon_new not in a:
+              if icon_old not in a:
+                  raise SystemExit("Achievement card icon marker not found")
+              a = a.replace(icon_old, icon_new, 1)
+
+          # Add visible-icon loader before ResizeAchievementCards.
+          resize_marker = '''        private void ResizeAchievementCards(FlowLayoutPanel panel)
+        {'''
+          lazy_loader = '''        private void LoadVisibleAchievementIcons(AchievementBrowseState state)
+        {
+            if (state.Results.IsDisposed)
+                return;
+
+            Rectangle viewport = state.Results.ClientRectangle;
+            viewport.Inflate(0, 120);
+
+            foreach (Control card in state.Results.Controls)
+            {
+                Rectangle bounds = new Rectangle(
+                    card.Left + state.Results.AutoScrollPosition.X,
+                    card.Top + state.Results.AutoScrollPosition.Y,
+                    card.Width,
+                    card.Height);
+
+                if (!viewport.IntersectsWith(bounds))
+                    continue;
+
+                foreach (PictureBox picture in card.Controls.OfType<PictureBox>())
+                {
+                    if (picture.Image != null || picture.Tag is not uint iconId)
+                        continue;
+
+                    // Title icons use the same sicon01-sicon07 atlas family as
+                    // Skill/Buff icons. Category Skill resolves those atlases.
+                    picture.Image = ImageDatabasePreview.TryLoadInterfaceIcon(iconId, "Skill");
+                }
+            }
+        }
+
+'''
+          if 'private void LoadVisibleAchievementIcons' not in a:
+              if resize_marker not in a:
+                  raise SystemExit("ResizeAchievementCards marker not found")
+              a = a.replace(resize_marker, lazy_loader + resize_marker, 1)
+
+          # Any editor preview still using Achieve category must use sicon family too.
+          a = a.replace('ImageDatabasePreview.TryLoadInterfaceIcon(iconId, "Achieve")',
+                        'ImageDatabasePreview.TryLoadInterfaceIcon(iconId, "Skill")')
+
+          achieve.write_text(a, encoding="utf-8")
+
+      - name: Commit fix and remove workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "DRW Work Tool/Form1.Editor.cs" "DRW Work Tool/Form1.AchievementIntegration.cs" "DRW Work Tool/Form1.AchievementEditor.cs"
+          git rm .github/workflows/temporary-fix-achievement-open-and-icons.yml
+          git commit -m "Fix Achievement direct routing loading and sicon previews"
+          git push origin master
