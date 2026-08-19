@@ -114,8 +114,13 @@ namespace DRW_Work_Tool
                 out Label status,
                 out TextBox log);
 
-            using var cts = new CancellationTokenSource();
-            page.Disposed += (_, _) => cts.Cancel();
+            var cts = new CancellationTokenSource();
+            EventHandler onPageDisposed = (_, _) =>
+            {
+                if (!cts.IsCancellationRequested)
+                    cts.Cancel();
+            };
+            page.Disposed += onPageDisposed;
 
             var progress = new Progress<string>(line =>
             {
@@ -130,6 +135,9 @@ namespace DRW_Work_Tool
                 CashShopDatabaseDiagnosticSummary summary = await service.CompareAsync(
                     connection, rootPath, progress, cts.Token);
 
+                if (page.IsDisposed)
+                    return;
+
                 status.Text = $"DONE • XML {summary.XmlFlattenedRows:N0} rows • DB {summary.DatabaseRows:N0} • matched {summary.MatchedRows:N0}";
                 status.ForeColor = Color.FromArgb(120, 220, 145);
                 log.AppendText(Environment.NewLine + "HIGH SIGNAL REPORT: " + summary.HighSignalReport + Environment.NewLine);
@@ -138,7 +146,7 @@ namespace DRW_Work_Tool
                     "Cash Shop database comparison completed.\r\n\r\n" +
                     $"XML groups: {summary.XmlContainers:N0}\r\n" +
                     $"XML purchase options: {summary.XmlOptions:N0}\r\n" +
-                    $"XML flattened rows: {summary.XmlFlattenedRows:N0}\r\n" +
+                    $"XML DB-shaped rows: {summary.XmlFlattenedRows:N0}\r\n" +
                     $"DB rows: {summary.DatabaseRows:N0}\r\n" +
                     $"Matched rows: {summary.MatchedRows:N0}\r\n\r\n" +
                     "Open the diagnostic folder?",
@@ -170,8 +178,14 @@ namespace DRW_Work_Tool
                     status.Text = "FAILED — database was not modified.";
                     status.ForeColor = Color.FromArgb(255, 100, 110);
                     log.AppendText(Environment.NewLine + ex + Environment.NewLine);
+                    ShowEditorError("CashShop Compare DB", ex);
                 }
-                ShowEditorError("CashShop Compare DB", ex);
+            }
+            finally
+            {
+                if (!page.IsDisposed)
+                    page.Disposed -= onPageDisposed;
+                cts.Dispose();
             }
         }
 
@@ -203,8 +217,8 @@ namespace DRW_Work_Tool
             DialogResult confirm = MessageBox.Show(
                 "This will REPLACE [dmo].[Asset].[CashShop] using the canonical CashShop XML folders.\r\n\r\n" +
                 "Numbered duplicate trees such as TamerInfo1 / DigimonInfo1 are ignored.\r\n" +
-                "One DB row is generated per CASHINFO × CashItems/Item relationship.\r\n" +
-                "Quanty / Price / Activated / ItemName are auto-detected from the current working DB when enough matching rows exist.\r\n\r\n" +
+                "One DB row is generated per CASHINFO purchase option, using the first valid CashItems/Item entry.\r\n" +
+                "Confirmed mapping: Quanty=first Amount, Price=nRealSellingPrice, Activated=Enabled, ItemName=Name.\r\n\r\n" +
                 "The entire operation runs in ONE SQL transaction and rolls back on failure.\r\n\r\n" +
                 "It is recommended to run COMPARE DB first. Continue?",
                 "Import CashShop to Database",
@@ -217,12 +231,17 @@ namespace DRW_Work_Tool
             var page = CreateDatabaseWorkTab(
                 "CashShop DB Import",
                 "CashShop XML → Asset.CashShop",
-                "Transactional import • automatic mapping verification",
+                "Transactional import • confirmed CashShop mapping",
                 out Label status,
                 out TextBox log);
 
-            using var cts = new CancellationTokenSource();
-            page.Disposed += (_, _) => cts.Cancel();
+            var cts = new CancellationTokenSource();
+            EventHandler onPageDisposed = (_, _) =>
+            {
+                if (!cts.IsCancellationRequested)
+                    cts.Cancel();
+            };
+            page.Disposed += onPageDisposed;
 
             var progress = new Progress<string>(line =>
             {
@@ -236,6 +255,9 @@ namespace DRW_Work_Tool
                 var service = new CashShopDatabaseImportService();
                 CashShopDatabaseImportSummary summary = await service.ImportAsync(
                     connection, rootPath, progress, cts.Token);
+
+                if (page.IsDisposed)
+                    return;
 
                 status.Text = $"DONE • {summary.Rows:N0} rows • {summary.Elapsed.TotalSeconds:N1}s";
                 status.ForeColor = Color.FromArgb(120, 220, 145);
@@ -267,8 +289,14 @@ namespace DRW_Work_Tool
                     status.Text = "FAILED — transaction rolled back.";
                     status.ForeColor = Color.FromArgb(255, 100, 110);
                     log.AppendText(Environment.NewLine + ex + Environment.NewLine);
+                    ShowEditorError("CashShop Database Import", ex);
                 }
-                ShowEditorError("CashShop Database Import", ex);
+            }
+            finally
+            {
+                if (!page.IsDisposed)
+                    page.Disposed -= onPageDisposed;
+                cts.Dispose();
             }
         }
 
