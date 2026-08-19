@@ -65,7 +65,7 @@ namespace DRW_Work_Tool.Core
             analysis.AppendLine("- achieve_icon    -> 0..255");
             analysis.AppendLine("- achieve_icon_02 -> 300..555");
             analysis.AppendLine("- achieve_icon_03 -> 556..811");
-            analysis.AppendLine("- cashshopG_PPP   -> base = GPPP00; mapeia no máximo 100 slots lógicos por atlas");
+            analysis.AppendLine("- cashshopG_PPP   -> base = GPPP00; 100 IDs lógicos (00..99) numa grelha 10x10; atlas físico pode ser 15x15");
             analysis.AppendLine();
             analysis.AppendLine("Atlases analisados");
             analysis.AppendLine("------------------");
@@ -185,10 +185,7 @@ namespace DRW_Work_Tool.Core
             if (atlas.Name.Equals("achieve_icon", StringComparison.OrdinalIgnoreCase))
             {
                 if (atlas.Capacity != 256)
-                {
-                    immediateWarning =
-                        $"esperado 256 slots físicos para achieve_icon, mas o atlas tem {atlas.Capacity}.";
-                }
+                    immediateWarning = $"esperado 256 slots físicos para achieve_icon, mas o atlas tem {atlas.Capacity}.";
 
                 return new AtlasRule
                 {
@@ -202,10 +199,7 @@ namespace DRW_Work_Tool.Core
             if (atlas.Name.Equals("achieve_icon_02", StringComparison.OrdinalIgnoreCase))
             {
                 if (atlas.Capacity != 256)
-                {
-                    immediateWarning =
-                        $"esperado 256 slots físicos para achieve_icon_02, mas o atlas tem {atlas.Capacity}.";
-                }
+                    immediateWarning = $"esperado 256 slots físicos para achieve_icon_02, mas o atlas tem {atlas.Capacity}.";
 
                 return new AtlasRule
                 {
@@ -219,10 +213,7 @@ namespace DRW_Work_Tool.Core
             if (atlas.Name.Equals("achieve_icon_03", StringComparison.OrdinalIgnoreCase))
             {
                 if (atlas.Capacity != 256)
-                {
-                    immediateWarning =
-                        $"esperado 256 slots físicos para achieve_icon_03, mas o atlas tem {atlas.Capacity}.";
-                }
+                    immediateWarning = $"esperado 256 slots físicos para achieve_icon_03, mas o atlas tem {atlas.Capacity}.";
 
                 return new AtlasRule
                 {
@@ -241,10 +232,10 @@ namespace DRW_Work_Tool.Core
                 int baseId = int.Parse($"{g}{p}00");
                 int count = Math.Min(atlas.Capacity, 100);
 
-                if (atlas.Capacity > 100)
+                if (count < 100)
                 {
                     immediateWarning =
-                        $"o atlas físico tem {atlas.Capacity} slots, mas a janela lógica cashshop foi limitada a 100 IDs ({baseId}..{baseId + count - 1}).";
+                        $"CashShop necessita de 100 slots lógicos, mas o atlas só permite mapear {count}.";
                 }
 
                 return new AtlasRule
@@ -252,7 +243,8 @@ namespace DRW_Work_Tool.Core
                     Category = "CashShop",
                     BaseId = baseId,
                     Count = count,
-                    Note = $"cashshop{g}_{p} => {baseId}..{baseId + count - 1}"
+                    LogicalColumns = 10,
+                    Note = $"cashshop{g}_{p} => {baseId}..{baseId + count - 1} | LogicalGrid=10x10 | PhysicalGrid={atlas.Columns}x{atlas.Rows}"
                 };
             }
 
@@ -286,39 +278,47 @@ namespace DRW_Work_Tool.Core
             AtlasRule rule)
         {
             int count = Math.Min(rule.Count, atlas.Capacity);
+            int columns = rule.LogicalColumns > 0 ? rule.LogicalColumns : atlas.Columns;
 
             for (int i = 0; i < count; i++)
             {
-                int column = i % atlas.Columns;
-                int row = i / atlas.Columns;
+                int column = i % columns;
+                int row = i / columns;
+
+                int x = column * atlas.TileWidth;
+                int y = row * atlas.TileHeight;
+
+                if (x + atlas.TileWidth > atlas.Width || y + atlas.TileHeight > atlas.Height)
+                    break;
 
                 document.Icons.Add(
                     new InterfaceIconMapEntry
                     {
                         Id = (rule.BaseId + i).ToString(),
                         Atlas = atlas.Name,
-                        X = column * atlas.TileWidth,
-                        Y = row * atlas.TileHeight,
+                        X = x,
+                        Y = y,
                         Width = atlas.TileWidth,
                         Height = atlas.TileHeight,
                         Category = rule.Category,
-                        Note = $"AutoMap | SlotIndex={i} | Base={rule.BaseId}"
+                        Note = $"AutoMap | SlotIndex={i} | Base={rule.BaseId} | Columns={columns}"
                     });
             }
 
-            return count;
+            return document.Icons.Count(x =>
+                x.Atlas.Equals(atlas.Name, StringComparison.OrdinalIgnoreCase) &&
+                x.Category.Equals(rule.Category, StringComparison.OrdinalIgnoreCase));
         }
 
         private static ulong ParseSortableId(string id) =>
-            ulong.TryParse(id, out ulong value)
-                ? value
-                : ulong.MaxValue;
+            ulong.TryParse(id, out ulong value) ? value : ulong.MaxValue;
 
         private sealed class AtlasRule
         {
             public string Category { get; init; } = string.Empty;
             public int BaseId { get; init; }
             public int Count { get; init; }
+            public int LogicalColumns { get; init; }
             public string Note { get; init; } = string.Empty;
         }
     }
