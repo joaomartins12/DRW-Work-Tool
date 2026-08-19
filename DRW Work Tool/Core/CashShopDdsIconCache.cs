@@ -9,8 +9,7 @@ namespace DRW_Work_Tool.Core
 {
     /// <summary>
     /// Cash Shop icon loader that deliberately uses DDS atlas variants.
-    /// It resolves the Cash Shop icon ID through InterfaceIconMap.json, then opens
-    /// the matching atlas .dds with DdsImageLoader and crops the mapped rectangle.
+    /// It resolves only Cash Shop icon mappings and never substitutes ItemList icons.
     /// </summary>
     public static class CashShopDdsIconCache
     {
@@ -37,6 +36,10 @@ namespace DRW_Work_Tool.Core
 
                 InterfaceIconMapEntry? mapping = database.InterfaceMap.Icons
                     .Where(x => NormalizeId(x.Id) == normalized)
+                    .Where(x =>
+                        x.Category.Equals("CashShop", StringComparison.OrdinalIgnoreCase) ||
+                        x.Atlas.Contains("cash", StringComparison.OrdinalIgnoreCase) ||
+                        x.Atlas.Contains("shop", StringComparison.OrdinalIgnoreCase))
                     .OrderByDescending(x => x.Category.Equals("CashShop", StringComparison.OrdinalIgnoreCase))
                     .ThenByDescending(x =>
                         x.Atlas.Contains("cash", StringComparison.OrdinalIgnoreCase) ||
@@ -58,7 +61,9 @@ namespace DRW_Work_Tool.Core
 
                 string? ddsPath = atlas.Files
                     .Select(x => ResolvePath(database.DatabaseRoot, x))
-                    .FirstOrDefault(x => File.Exists(x) && Path.GetExtension(x).Equals(".dds", StringComparison.OrdinalIgnoreCase));
+                    .FirstOrDefault(x =>
+                        File.Exists(x) &&
+                        Path.GetExtension(x).Equals(".dds", StringComparison.OrdinalIgnoreCase));
 
                 if (string.IsNullOrWhiteSpace(ddsPath))
                 {
@@ -69,8 +74,12 @@ namespace DRW_Work_Tool.Core
                 Bitmap atlasBitmap = GetAtlas(ddsPath);
                 var source = new Rectangle(mapping.X, mapping.Y, mapping.Width, mapping.Height);
 
-                if (source.Width <= 0 || source.Height <= 0 || source.X < 0 || source.Y < 0 ||
-                    source.Right > atlasBitmap.Width || source.Bottom > atlasBitmap.Height)
+                if (source.Width <= 0 ||
+                    source.Height <= 0 ||
+                    source.X < 0 ||
+                    source.Y < 0 ||
+                    source.Right > atlasBitmap.Width ||
+                    source.Bottom > atlasBitmap.Height)
                 {
                     Cache(iconId, null);
                     return null;
@@ -80,7 +89,11 @@ namespace DRW_Work_Tool.Core
                 using (Graphics graphics = Graphics.FromImage(icon))
                 {
                     graphics.Clear(Color.Transparent);
-                    graphics.DrawImage(atlasBitmap, new Rectangle(0, 0, icon.Width, icon.Height), source, GraphicsUnit.Pixel);
+                    graphics.DrawImage(
+                        atlasBitmap,
+                        new Rectangle(0, 0, icon.Width, icon.Height),
+                        source,
+                        GraphicsUnit.Pixel);
                 }
 
                 Cache(iconId, icon);
