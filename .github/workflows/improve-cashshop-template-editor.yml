@@ -1,0 +1,945 @@
+name: Improve CashShop Template Editor
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Improve CashShop cards and template editor
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('DRW Work Tool/Form1.CashShopEditor.cs')
+          text = path.read_text(encoding='utf-8-sig')
+
+          # ------------------------------------------------------------------
+          # Service: ID validation/suggestion.
+          # ------------------------------------------------------------------
+          marker = '''            public IReadOnlyList<CashShopItemReference> SearchItems(string query)
+            {
+                string q = (query ?? string.Empty).Trim();
+                return _itemsById.Values
+                    .Where(x => q.Length == 0 ||
+                                x.Id.ToString().Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                                x.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                                x.Description.Contains(q, StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(x => x.Id)
+                    .Take(1000)
+                    .ToList();
+            }
+'''
+          addition = marker + '''
+            public uint GetNextCashShopId(CashShopRecord? current = null)
+            {
+                HashSet<uint> used = Records
+                    .Where(x => current == null || !ReferenceEquals(x.Container, current.Container))
+                    .Select(x => x.CashShopId)
+                    .Where(x => x > 0)
+                    .ToHashSet();
+
+                uint candidate = used.Count == 0 ? 1u : used.Max() + 1u;
+                while (candidate > 0 && used.Contains(candidate)) candidate++;
+                return candidate == 0 ? 1u : candidate;
+            }
+
+            public uint GetNextUniqueId(CashShopRecord? current = null)
+            {
+                HashSet<uint> used = Records
+                    .Where(x => current == null || !ReferenceEquals(x.Node, current.Node))
+                    .Select(x => x.UniqueId)
+                    .Where(x => x > 0)
+                    .ToHashSet();
+
+                uint candidate = used.Count == 0 ? 1u : used.Max() + 1u;
+                while (candidate > 0 && used.Contains(candidate)) candidate++;
+                return candidate == 0 ? 1u : candidate;
+            }
+
+            public bool IsCashShopIdAvailable(uint id, CashShopRecord current) =>
+                id > 0 && !Records.Any(x =>
+                    !ReferenceEquals(x.Container, current.Container) &&
+                    x.CashShopId == id);
+
+            public bool IsUniqueIdAvailable(uint id, CashShopRecord current) =>
+                id > 0 && !Records.Any(x =>
+                    !ReferenceEquals(x.Node, current.Node) &&
+                    x.UniqueId == id);
+'''
+          if marker not in text:
+              raise SystemExit('SearchItems marker not found')
+          text = text.replace(marker, addition, 1)
+
+          # ------------------------------------------------------------------
+          # Save validates IDs.
+          # ------------------------------------------------------------------
+          old_save = '''            public void Save(CashShopRecord source, XElement working, uint cashShopId)
+            {
+                XElement? id = source.Container.Element("CashShopId");
+                if (id == null) source.Container.AddFirst(new XElement("CashShopId", cashShopId));
+                else id.Value = cashShopId.ToString(CultureInfo.InvariantCulture);
+
+                XElement replacement = new XElement(working);
+                source.Node.ReplaceWith(replacement);
+                source.Node = replacement;
+                SaveDocument(source.Document, source.FilePath);
+            }
+'''
+          new_save = '''            public void Save(CashShopRecord source, XElement working, uint cashShopId)
+            {
+                uint uniqueId = ParseUInt(working.Element("unique_id")?.Value);
+                if (!IsCashShopIdAvailable(cashShopId, source))
+                    throw new InvalidDataException($"CashShop ID {cashShopId} is already used by another CashShopInformationCount.");
+                if (!IsUniqueIdAvailable(uniqueId, source))
+                    throw new InvalidDataException($"Unique Product ID {uniqueId} is already in use.");
+
+                XElement? id = source.Container.Element("CashShopId");
+                if (id == null) source.Container.AddFirst(new XElement("CashShopId", cashShopId));
+                else id.Value = cashShopId.ToString(CultureInfo.InvariantCulture);
+
+                XElement replacement = new XElement(working);
+                source.Node.ReplaceWith(replacement);
+                source.Node = replacement;
+                SaveDocument(source.Document, source.FilePath);
+            }
+'''
+          if old_save not in text:
+              raise SystemExit('Save block not found')
+          text = text.replace(old_save, new_save, 1)
+
+          # ------------------------------------------------------------------
+          # Clone/new template gets a separate container + valid IDs.
+          # ------------------------------------------------------------------
+          clone_start = text.index('            private CashShopRecord CloneCore(CashShopRecord source, string name)')
+          clone_end = text.index('            private void LoadCanonicalGroup(', clone_start)
+          clone_new = r'''            private CashShopRecord CloneCore(CashShopRecord source, string name)
+            {
+                XElement clone = new XElement(source.Node);
+                uint nextUnique = GetNextUniqueId();
+                uint nextCashShopId = GetNextCashShopId();
+
+                Set(clone, "unique_id", nextUnique.ToString(CultureInfo.InvariantCulture));
+                Set(clone, "Enabled", "0");
+                Set(clone, "Name", name);
+
+                XElement parent = source.Container.Parent
+                    ?? throw new InvalidDataException("CashShopInformationCount root is missing.");
+
+                XElement newContainer = new XElement(source.Container);
+                Set(newContainer, "CashShopId", nextCashShopId.ToString(CultureInfo.InvariantCulture));
+
+                XElement cashInfo = newContainer.Element("CashInfo") ?? new XElement("CashInfo");
+                if (cashInfo.Parent == null)
+                    newContainer.Add(cashInfo);
+
+                cashInfo.Elements("CASHINFO").Remove();
+                XElement newNode = new XElement(clone);
+                cashInfo.Add(newNode);
+
+                source.Container.AddAfterSelf(newContainer);
+                SaveDocument(source.Document, source.FilePath);
+
+                var record = new CashShopRecord
+                {
+                    FilePath = source.FilePath,
+                    Document = source.Document,
+                    Container = newContainer,
+                    Node = newNode,
+                    Group = source.Group,
+                    Category = source.Category
+                };
+
+                Records.Add(record);
+                return record;
+            }
+
+'''
+          text = text[:clone_start] + clone_new + text[clone_end:]
+
+          # ------------------------------------------------------------------
+          # Cards: compact but with fully visible 24px buttons.
+          # ------------------------------------------------------------------
+          card_start = text.index('        private Control CreateCashShopCard(CashShopBrowseState state, CashShopRecord record)')
+          card_end = text.index('        private void ResizeCashShopCards(CashShopBrowseState state)', card_start)
+          card_new = r'''        private Control CreateCashShopCard(CashShopBrowseState state, CashShopRecord record)
+        {
+            var card = new Panel
+            {
+                Width = 220,
+                Height = 130,
+                BackColor = Color.FromArgb(32, 32, 40),
+                Margin = new Padding(3),
+                Tag = record
+            };
+            card.Paint += (_, e) =>
+            {
+                using var p = new Pen(Color.FromArgb(72, 72, 84));
+                e.Graphics.DrawRectangle(p, 0, 0, card.Width - 1, card.Height - 1);
+            };
+
+            Image? preview = CashShopDdsIconCache.TryLoad(record.IconId);
+            var icon = new PictureBox
+            {
+                Size = new Size(38, 38),
+                BackColor = Color.FromArgb(8, 8, 12),
+                SizeMode = PictureBoxSizeMode.Zoom,
+                Image = preview
+            };
+            var badge = new Label
+            {
+                Text = record.Badge,
+                ForeColor = Color.FromArgb(255, 205, 70),
+                Font = new Font("Segoe UI Semibold", 6.7F, FontStyle.Bold),
+                Size = new Size(58, 14),
+                Visible = !string.IsNullOrWhiteSpace(record.Badge)
+            };
+            var status = new Label
+            {
+                Text = record.Active ? "ACTIVE" : "DISABLED",
+                ForeColor = record.Active ? Color.FromArgb(100, 230, 130) : Color.FromArgb(240, 95, 95),
+                Font = new Font("Segoe UI Semibold", 6.7F, FontStyle.Bold),
+                Size = new Size(70, 14),
+                TextAlign = ContentAlignment.MiddleRight
+            };
+            var name = new Label
+            {
+                Text = string.IsNullOrWhiteSpace(record.Name) ? $"Cash Shop {record.CashShopId}" : record.Name,
+                ForeColor = CText,
+                Font = new Font("Segoe UI Semibold", 7.5F, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter,
+                AutoEllipsis = true
+            };
+            string itemText = record.Items.Count == 0
+                ? "No ItemList item"
+                : string.Join(", ", record.Items.Take(2).Select(x => $"{x.ItemId} x{x.Amount}"));
+            var itemLabel = new Label
+            {
+                Text = itemText,
+                ForeColor = CMuted,
+                Font = new Font("Segoe UI", 6.7F),
+                TextAlign = ContentAlignment.MiddleCenter,
+                AutoEllipsis = true
+            };
+            var price = new Label
+            {
+                Text = $"C {record.Price:N0} • ID {record.CashShopId} • P {record.UniqueId}",
+                ForeColor = Color.FromArgb(245, 205, 80),
+                Font = new Font("Segoe UI", 6.6F),
+                TextAlign = ContentAlignment.MiddleCenter,
+                AutoEllipsis = true
+            };
+            var edit = CreateEditorActionButton("EDIT");
+            edit.Size = new Size(84, 24);
+            var clone = CreateEditorActionButton("CLONE");
+            clone.Size = new Size(84, 24);
+
+            void LayoutCard()
+            {
+                int w = card.ClientSize.Width;
+                int h = card.ClientSize.Height;
+                icon.Location = new Point(Math.Max(4, (w - icon.Width) / 2), 3);
+                badge.Location = new Point(6, 3);
+                status.Location = new Point(Math.Max(6, w - status.Width - 6), 3);
+                name.Location = new Point(6, 42);
+                name.Size = new Size(Math.Max(80, w - 12), 20);
+                itemLabel.Location = new Point(6, 62);
+                itemLabel.Size = new Size(Math.Max(80, w - 12), 14);
+                price.Location = new Point(6, 76);
+                price.Size = new Size(Math.Max(80, w - 12), 14);
+
+                int buttonY = Math.Max(94, h - edit.Height - 5);
+                edit.Location = new Point(6, buttonY);
+                clone.Location = new Point(Math.Max(edit.Right + 5, w - clone.Width - 6), buttonY);
+            }
+
+            card.Resize += (_, _) => LayoutCard();
+            edit.Click += (_, _) => OpenCashShopEditTab(state.Service, record, new XElement(record.Node));
+            clone.Click += (_, _) =>
+            {
+                CashShopRecord cloned = state.Service.CloneRecord(record);
+                OpenCashShopEditTab(state.Service, cloned, new XElement(cloned.Node));
+                RefreshCashShopBrowser(state);
+            };
+
+            card.Controls.AddRange(new Control[] { icon, badge, status, name, itemLabel, price, edit, clone });
+            LayoutCard();
+            return card;
+        }
+
+'''
+          text = text[:card_start] + card_new + text[card_end:]
+
+          resize_start = text.index('        private void ResizeCashShopCards(CashShopBrowseState state)')
+          resize_end = text.index('        private void OpenCashShopEditTab(', resize_start)
+          resize_new = r'''        private void ResizeCashShopCards(CashShopBrowseState state)
+        {
+            const int columns = 3;
+            const int rows = 3;
+            const int cardMargin = 6;
+
+            int usableWidth = Math.Max(570, state.Cards.ClientSize.Width - state.Cards.Padding.Horizontal);
+            int cardWidth = Math.Max(175, (usableWidth - (columns * cardMargin) - 2) / columns);
+
+            int usableHeight = Math.Max(360, state.Cards.ClientSize.Height - state.Cards.Padding.Vertical);
+            int cardHeight = (usableHeight - (rows * cardMargin) - 2) / rows;
+            cardHeight = Math.Max(126, Math.Min(134, cardHeight));
+
+            foreach (Control card in state.Cards.Controls)
+            {
+                card.Width = cardWidth;
+                card.Height = cardHeight;
+            }
+        }
+
+'''
+          text = text[:resize_start] + resize_new + text[resize_end:]
+
+          # ------------------------------------------------------------------
+          # Full interactive edit/new-template form.
+          # ------------------------------------------------------------------
+          edit_start = text.index('        private void OpenCashShopEditTab(CashShopService service, CashShopRecord record, XElement working)')
+          edit_end = text.index('        private CashShopItemReference? OpenCashShopItemPicker(', edit_start)
+          edit_new = r'''        private void OpenCashShopEditTab(CashShopService service, CashShopRecord record, XElement working)
+        {
+            var page = CreateDarkTab((record.Name.Length > 0 ? record.Name : "Cash Shop Item") + " [Edit]");
+            var top = new Panel { Dock = DockStyle.Top, Height = 64, BackColor = CEditor, Padding = new Padding(14, 12, 14, 10) };
+            var save = CreateEditorActionButton("SAVE");
+            save.Size = new Size(100, 34);
+            var source = new Label
+            {
+                ForeColor = CMuted,
+                Location = new Point(120, 8),
+                Size = new Size(680, 42),
+                AutoEllipsis = true,
+                Text = $"{record.Group} / {record.Category} • {Path.GetFileName(record.FilePath)}"
+            };
+            top.Controls.Add(save);
+            top.Controls.Add(source);
+
+            var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = CEditor, Padding = new Padding(18) };
+            DarkUi.ApplyDarkScrollBar(scroll);
+            var form = new Panel { Width = 860, Height = 960, BackColor = CEditor };
+            scroll.Controls.Add(form);
+            page.Controls.Add(scroll);
+            page.Controls.Add(top);
+
+            var preview = new PictureBox
+            {
+                Location = new Point(16, 12),
+                Size = new Size(108, 108),
+                BackColor = Color.FromArgb(8, 8, 12),
+                SizeMode = PictureBoxSizeMode.Zoom
+            };
+            form.Controls.Add(preview);
+
+            var activeLabel = new Label
+            {
+                Location = new Point(142, 12),
+                Size = new Size(180, 24),
+                Font = new Font("Segoe UI Semibold", 9F, FontStyle.Bold)
+            };
+            form.Controls.Add(activeLabel);
+
+            var fields = new Dictionary<string, TextBox>();
+            int y = 48;
+            AddField("CashShop ID", "__CashShopId", 142, y, 160);
+            AddField("Unique Product ID", "unique_id", 320, y, 220);
+
+            var useNextIds = CreateEditorActionButton("USE NEXT IDS");
+            useNextIds.Location = new Point(558, y + 19);
+            useNextIds.Size = new Size(132, 26);
+            form.Controls.Add(useNextIds);
+            y += 50;
+
+            var cashIdStatus = new Label { Location = new Point(142, y), Size = new Size(250, 20), Font = new Font("Segoe UI Semibold", 7.5F) };
+            var uniqueIdStatus = new Label { Location = new Point(400, y), Size = new Size(290, 20), Font = new Font("Segoe UI Semibold", 7.5F) };
+            form.Controls.Add(cashIdStatus);
+            form.Controls.Add(uniqueIdStatus);
+            y += 30;
+
+            AddField("Name", "Name", 142, y, 548);
+            y += 58;
+            AddField("Description", "Description", 16, y, 760, true, 92);
+            y += 128;
+
+            AddField("Enabled (0/1)", "Enabled", 16, y, 112);
+            AddField("Icon ID", "nIconID", 144, y, 142);
+            var selectIcon = CreateEditorActionButton("SELECT ICON");
+            selectIcon.Location = new Point(300, y + 19);
+            selectIcon.Size = new Size(126, 26);
+            form.Controls.Add(selectIcon);
+            AddField("Currency Type", "nPurchaseCashType", 444, y, 150);
+            var iconStatus = new Label { Location = new Point(604, y + 21), Size = new Size(190, 22), Font = new Font("Segoe UI Semibold", 7.3F) };
+            form.Controls.Add(iconStatus);
+            y += 58;
+
+            AddField("Standard Price", "nStandardSellingPrice", 16, y, 160);
+            AddField("Selling Price", "nRealSellingPrice", 194, y, 160);
+            AddField("Sale %", "nSalePersent", 372, y, 130);
+            y += 58;
+
+            AddField("Display Type", "nDispType", 16, y, 150);
+            AddField("Display Count", "nDispCount", 184, y, 150);
+            AddField("Mask Type", "nMaskType", 352, y, 150);
+            var displayHint = new Label
+            {
+                Text = "Display Count updates the quantity of every ItemList entry below.",
+                ForeColor = CMuted,
+                Location = new Point(520, y + 21),
+                Size = new Size(310, 22),
+                Font = new Font("Segoe UI", 7.3F)
+            };
+            form.Controls.Add(displayHint);
+            y += 58;
+
+            AddField("Start Date", "Date1", 16, y, 235);
+            AddField("End Date", "Date2", 270, y, 235);
+            y += 72;
+
+            var itemTitle = new Label
+            {
+                Text = "ITEMLIST CONTENT",
+                ForeColor = CText,
+                Font = new Font("Segoe UI Semibold", 9F, FontStyle.Bold),
+                Location = new Point(16, y),
+                AutoSize = true
+            };
+            form.Controls.Add(itemTitle);
+            y += 26;
+
+            var itemList = new ListBox
+            {
+                Location = new Point(16, y),
+                Size = new Size(492, 142),
+                BackColor = Color.FromArgb(16, 16, 18),
+                ForeColor = CText,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            var itemPreview = new PictureBox
+            {
+                Location = new Point(524, y),
+                Size = new Size(82, 82),
+                BackColor = Color.FromArgb(8, 8, 12),
+                SizeMode = PictureBoxSizeMode.Zoom
+            };
+            var itemPreviewText = new Label
+            {
+                Location = new Point(516, y + 86),
+                Size = new Size(210, 48),
+                ForeColor = CMuted,
+                TextAlign = ContentAlignment.TopCenter,
+                AutoEllipsis = true
+            };
+            var selectItem = CreateEditorActionButton("SELECT ITEM");
+            selectItem.Location = new Point(624, y);
+            selectItem.Size = new Size(132, 32);
+            var addItem = CreateEditorActionButton("ADD ITEM");
+            addItem.Location = new Point(624, y + 40);
+            addItem.Size = new Size(132, 32);
+            var removeItem = CreateEditorActionButton("REMOVE");
+            removeItem.Location = new Point(624, y + 80);
+            removeItem.Size = new Size(132, 32);
+            form.Controls.AddRange(new Control[] { itemList, itemPreview, itemPreviewText, selectItem, addItem, removeItem });
+
+            var workingItems = working.Element("CashItems")?.Elements("Item")
+                .Select(x => new XElement(x)).ToList() ?? new List<XElement>();
+
+            int CurrentDisplayCount() => Math.Max(1, ParseInt(fields["nDispCount"].Text));
+
+            void RefreshItemPreview()
+            {
+                Image? old = itemPreview.Image;
+                itemPreview.Image = null;
+                itemPreviewText.Text = string.Empty;
+
+                int index = itemList.SelectedIndex;
+                if (index >= 0 && index < workingItems.Count)
+                {
+                    uint id = ParseUInt(workingItems[index].Element("ItemId")?.Value);
+                    CashShopItemReference? item = service.FindItem(id);
+                    if (item != null)
+                    {
+                        itemPreview.Image = ImageDatabasePreview.TryLoadInterfaceIcon(item.IconId, "Item");
+                        itemPreviewText.Text = $"{item.Id} — {item.Name}";
+                    }
+                }
+
+                if (!ReferenceEquals(old, itemPreview.Image))
+                    old?.Dispose();
+            }
+
+            void RefreshItems()
+            {
+                int selectedIndex = itemList.SelectedIndex;
+                itemList.BeginUpdate();
+                itemList.Items.Clear();
+                foreach (XElement entry in workingItems)
+                {
+                    uint id = ParseUInt(entry.Element("ItemId")?.Value);
+                    int amount = Math.Max(1, ParseInt(entry.Element("Amount")?.Value));
+                    itemList.Items.Add($"{id} x{amount} — {service.FindItem(id)?.Name ?? "Unknown Item"}");
+                }
+                itemList.EndUpdate();
+
+                if (itemList.Items.Count > 0)
+                    itemList.SelectedIndex = Math.Clamp(selectedIndex < 0 ? 0 : selectedIndex, 0, itemList.Items.Count - 1);
+                else
+                    RefreshItemPreview();
+            }
+
+            void ApplyDisplayCountToItems()
+            {
+                int amount = CurrentDisplayCount();
+                foreach (XElement entry in workingItems)
+                    SetCashShopElement(entry, "Amount", amount.ToString(CultureInfo.InvariantCulture));
+                RefreshItems();
+            }
+
+            void RefreshIdValidation()
+            {
+                uint cashId = ParseUInt(fields["__CashShopId"].Text);
+                uint uniqueId = ParseUInt(fields["unique_id"].Text);
+                bool cashAvailable = service.IsCashShopIdAvailable(cashId, record);
+                bool uniqueAvailable = service.IsUniqueIdAvailable(uniqueId, record);
+
+                cashIdStatus.Text = cashAvailable
+                    ? $"AVAILABLE • next {service.GetNextCashShopId(record)}"
+                    : $"IN USE • suggested {service.GetNextCashShopId(record)}";
+                cashIdStatus.ForeColor = cashAvailable ? Color.FromArgb(100, 230, 130) : Color.FromArgb(240, 95, 95);
+
+                uniqueIdStatus.Text = uniqueAvailable
+                    ? $"AVAILABLE • next {service.GetNextUniqueId(record)}"
+                    : $"IN USE • suggested {service.GetNextUniqueId(record)}";
+                uniqueIdStatus.ForeColor = uniqueAvailable ? Color.FromArgb(100, 230, 130) : Color.FromArgb(240, 95, 95);
+            }
+
+            void RefreshStatus()
+            {
+                bool active = ParseInt(fields["Enabled"].Text) != 0;
+                activeLabel.Text = active ? "ACTIVE" : "DISABLED";
+                activeLabel.ForeColor = active ? Color.FromArgb(100, 230, 130) : Color.FromArgb(240, 95, 95);
+            }
+
+            void RefreshPreview()
+            {
+                uint iconId = ParseUInt(fields["nIconID"].Text);
+                Image? old = preview.Image;
+                preview.Image = CashShopDdsIconCache.TryLoad(iconId);
+                if (!ReferenceEquals(old, preview.Image))
+                    old?.Dispose();
+
+                bool valid = CashShopDdsIconCache.IsValidIconId(iconId);
+                iconStatus.Text = valid ? "VALID CASH SHOP ICON" : "INVALID / NOT FOUND";
+                iconStatus.ForeColor = valid ? Color.FromArgb(100, 230, 130) : Color.FromArgb(240, 95, 95);
+            }
+
+            selectItem.Click += (_, _) =>
+            {
+                CashShopItemReference? selected = OpenCashShopItemPicker(service);
+                if (selected == null) return;
+                int index = itemList.SelectedIndex;
+                int amount = CurrentDisplayCount();
+                if (index < 0 || index >= workingItems.Count)
+                    workingItems.Add(new XElement("Item", new XElement("ItemId", selected.Id), new XElement("Amount", amount)));
+                else
+                {
+                    SetCashShopElement(workingItems[index], "ItemId", selected.Id.ToString(CultureInfo.InvariantCulture));
+                    SetCashShopElement(workingItems[index], "Amount", amount.ToString(CultureInfo.InvariantCulture));
+                }
+                RefreshItems();
+            };
+
+            addItem.Click += (_, _) =>
+            {
+                CashShopItemReference? selected = OpenCashShopItemPicker(service);
+                if (selected == null) return;
+                workingItems.Add(new XElement(
+                    "Item",
+                    new XElement("ItemId", selected.Id),
+                    new XElement("Amount", CurrentDisplayCount())));
+                RefreshItems();
+            };
+
+            removeItem.Click += (_, _) =>
+            {
+                int i = itemList.SelectedIndex;
+                if (i >= 0 && i < workingItems.Count)
+                {
+                    workingItems.RemoveAt(i);
+                    RefreshItems();
+                }
+            };
+
+            itemList.SelectedIndexChanged += (_, _) => RefreshItemPreview();
+            fields["Enabled"].TextChanged += (_, _) => RefreshStatus();
+            fields["nIconID"].TextChanged += (_, _) => RefreshPreview();
+            fields["nDispCount"].TextChanged += (_, _) => ApplyDisplayCountToItems();
+            fields["__CashShopId"].TextChanged += (_, _) => RefreshIdValidation();
+            fields["unique_id"].TextChanged += (_, _) => RefreshIdValidation();
+
+            selectIcon.Click += (_, _) =>
+            {
+                uint current = ParseUInt(fields["nIconID"].Text);
+                uint? selected = OpenCashShopIconPicker(current);
+                if (selected.HasValue)
+                    fields["nIconID"].Text = selected.Value.ToString(CultureInfo.InvariantCulture);
+            };
+
+            useNextIds.Click += (_, _) =>
+            {
+                fields["__CashShopId"].Text = service.GetNextCashShopId(record).ToString(CultureInfo.InvariantCulture);
+                fields["unique_id"].Text = service.GetNextUniqueId(record).ToString(CultureInfo.InvariantCulture);
+            };
+
+            save.Click += (_, _) =>
+            {
+                try
+                {
+                    PullFields();
+                    uint cashShopId = ParseUInt(fields["__CashShopId"].Text);
+                    uint uniqueId = ParseUInt(fields["unique_id"].Text);
+                    uint iconId = ParseUInt(fields["nIconID"].Text);
+
+                    if (!service.IsCashShopIdAvailable(cashShopId, record))
+                        throw new InvalidDataException($"CashShop ID {cashShopId} is already in use.");
+                    if (!service.IsUniqueIdAvailable(uniqueId, record))
+                        throw new InvalidDataException($"Unique Product ID {uniqueId} is already in use.");
+                    if (!CashShopDdsIconCache.IsValidIconId(iconId))
+                        throw new InvalidDataException($"Cash Shop Icon ID {iconId} does not resolve to a valid Cash Shop DDS slot.");
+
+                    ApplyDisplayCountToItems();
+                    XElement cashItems = working.Element("CashItems") ?? new XElement("CashItems");
+                    if (cashItems.Parent == null) working.Add(cashItems);
+                    cashItems.RemoveNodes();
+                    foreach (XElement entry in workingItems) cashItems.Add(new XElement(entry));
+
+                    service.Save(record, working, cashShopId);
+                    page.Text = (working.Element("Name")?.Value ?? "Cash Shop Item").Replace("\\n", " ") + " [Edit]";
+
+                    foreach (TabPage browserPage in editorTabs.TabPages)
+                        if (browserPage.Tag is CashShopBrowseState browser && ReferenceEquals(browser.Service, service))
+                            RefreshCashShopBrowser(browser);
+
+                    MessageBox.Show("Cash Shop XML saved successfully.", "Cash Shop Editor", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    ShowEditorError("Save Cash Shop Product", ex);
+                }
+            };
+
+            scroll.Resize += (_, _) => form.Width = Math.Max(830, scroll.ClientSize.Width - 40);
+            RefreshItems();
+            RefreshStatus();
+            RefreshPreview();
+            RefreshIdValidation();
+            editorTabs.TabPages.Add(page);
+            editorTabs.SelectedTab = page;
+
+            void AddField(string label, string element, int x, int topY, int width, bool multiline = false, int height = 24)
+            {
+                form.Controls.Add(new Label
+                {
+                    Text = label,
+                    ForeColor = CText,
+                    Location = new Point(x, topY),
+                    Size = new Size(width, 18),
+                    Font = new Font("Segoe UI Semibold", 8F)
+                });
+                string value = element == "__CashShopId"
+                    ? record.CashShopId.ToString(CultureInfo.InvariantCulture)
+                    : working.Element(element)?.Value ?? string.Empty;
+                var box = new TextBox
+                {
+                    Text = value,
+                    Location = new Point(x, topY + 20),
+                    Size = new Size(width, height),
+                    Multiline = multiline,
+                    ScrollBars = multiline ? ScrollBars.Vertical : ScrollBars.None,
+                    BackColor = Color.FromArgb(10, 10, 10),
+                    ForeColor = CText,
+                    BorderStyle = BorderStyle.FixedSingle
+                };
+                fields[element] = box;
+                form.Controls.Add(box);
+            }
+
+            void PullFields()
+            {
+                foreach ((string key, TextBox box) in fields)
+                    if (key != "__CashShopId")
+                        SetCashShopElement(working, key, box.Text);
+            }
+        }
+
+        private uint? OpenCashShopIconPicker(uint currentIconId)
+        {
+            IReadOnlyList<CashShopIconAtlasPage> pages = CashShopDdsIconCache.GetAtlasPages();
+            if (pages.Count == 0)
+            {
+                MessageBox.Show(
+                    "No Cash Shop DDS atlases were found in ImgDatabase/interface/icon.",
+                    "Select Cash Shop Icon",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return null;
+            }
+
+            using var dialog = new Form
+            {
+                Text = "Select Cash Shop DDS Icon",
+                Size = new Size(650, 700),
+                StartPosition = FormStartPosition.CenterParent,
+                BackColor = CEditor,
+                ForeColor = CText,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MinimizeBox = false,
+                MaximizeBox = false
+            };
+
+            var previous = CreateEditorActionButton("◀ PREVIOUS");
+            previous.Location = new Point(14, 14);
+            previous.Size = new Size(118, 30);
+            var pageInfo = new Label
+            {
+                Location = new Point(142, 14),
+                Size = new Size(350, 30),
+                ForeColor = CText,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font("Segoe UI Semibold", 9F)
+            };
+            var next = CreateEditorActionButton("NEXT ▶");
+            next.Location = new Point(502, 14);
+            next.Size = new Size(118, 30);
+
+            var grid = new FlowLayoutPanel
+            {
+                Location = new Point(14, 56),
+                Size = new Size(606, 548),
+                BackColor = Color.FromArgb(18, 18, 20),
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = true,
+                AutoScroll = false,
+                Padding = new Padding(5)
+            };
+
+            var selectedLabel = new Label
+            {
+                Location = new Point(14, 612),
+                Size = new Size(390, 34),
+                ForeColor = CText,
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+            var select = CreateEditorActionButton("SELECT");
+            select.Location = new Point(500, 612);
+            select.Size = new Size(120, 34);
+            select.Enabled = false;
+
+            dialog.Controls.AddRange(new Control[] { previous, pageInfo, next, grid, selectedLabel, select });
+
+            int pageIndex = 0;
+            for (int i = 0; i < pages.Count; i++)
+            {
+                if (pages[i].IconIds.Contains(currentIconId))
+                {
+                    pageIndex = i;
+                    break;
+                }
+            }
+
+            uint selectedId = 0;
+            var images = new List<Image>();
+
+            void ClearGrid()
+            {
+                foreach (Image image in images) image.Dispose();
+                images.Clear();
+                grid.Controls.Clear();
+            }
+
+            void RenderPage()
+            {
+                ClearGrid();
+                CashShopIconAtlasPage atlas = pages[pageIndex];
+                pageInfo.Text = $"{atlas.AtlasName} • {pageIndex + 1} / {pages.Count}";
+                previous.Enabled = pageIndex > 0;
+                next.Enabled = pageIndex < pages.Count - 1;
+
+                foreach (uint iconId in atlas.IconIds)
+                {
+                    Bitmap? bitmap = CashShopDdsIconCache.TryLoad(iconId);
+                    var button = new Button
+                    {
+                        Size = new Size(92, 84),
+                        Margin = new Padding(3),
+                        FlatStyle = FlatStyle.Flat,
+                        BackColor = Color.FromArgb(28, 28, 34),
+                        ForeColor = CText,
+                        Text = iconId.ToString(CultureInfo.InvariantCulture),
+                        TextAlign = ContentAlignment.BottomCenter,
+                        BackgroundImage = bitmap,
+                        BackgroundImageLayout = ImageLayout.Zoom,
+                        FlatAppearance = { BorderColor = iconId == currentIconId ? Color.FromArgb(255, 180, 40) : Color.FromArgb(70, 70, 78) }
+                    };
+                    if (bitmap != null) images.Add(bitmap);
+
+                    button.Click += (_, _) =>
+                    {
+                        selectedId = iconId;
+                        selectedLabel.Text = $"Selected Icon ID: {selectedId}";
+                        select.Enabled = true;
+                        foreach (Button other in grid.Controls.OfType<Button>())
+                            other.FlatAppearance.BorderColor = ReferenceEquals(other, button)
+                                ? Color.FromArgb(255, 180, 40)
+                                : Color.FromArgb(70, 70, 78);
+                    };
+                    button.DoubleClick += (_, _) =>
+                    {
+                        selectedId = iconId;
+                        dialog.DialogResult = DialogResult.OK;
+                    };
+                    grid.Controls.Add(button);
+                }
+            }
+
+            previous.Click += (_, _) => { if (pageIndex > 0) { pageIndex--; selectedId = 0; select.Enabled = false; RenderPage(); } };
+            next.Click += (_, _) => { if (pageIndex < pages.Count - 1) { pageIndex++; selectedId = 0; select.Enabled = false; RenderPage(); } };
+            select.Click += (_, _) => { if (selectedId > 0) dialog.DialogResult = DialogResult.OK; };
+
+            RenderPage();
+            DialogResult result = dialog.ShowDialog(this);
+            ClearGrid();
+            return result == DialogResult.OK && selectedId > 0 ? selectedId : null;
+        }
+
+'''
+          text = text[:edit_start] + edit_new + text[edit_end:]
+
+          # ------------------------------------------------------------------
+          # Item picker with ItemList icon preview.
+          # ------------------------------------------------------------------
+          picker_start = text.index('        private CashShopItemReference? OpenCashShopItemPicker(CashShopService service)')
+          picker_end = text.index('        private static void DisposeCashShopCardImages(', picker_start)
+          picker_new = r'''        private CashShopItemReference? OpenCashShopItemPicker(CashShopService service)
+        {
+            using var dialog = new Form
+            {
+                Text = "Select Item from ItemList.xml",
+                Size = new Size(860, 610),
+                StartPosition = FormStartPosition.CenterParent,
+                BackColor = CEditor,
+                ForeColor = CText,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MinimizeBox = false,
+                MaximizeBox = false
+            };
+            var search = new TextBox
+            {
+                Location = new Point(14, 14),
+                Size = new Size(814, 28),
+                PlaceholderText = "Search Item ID, name or description...",
+                BackColor = Color.FromArgb(10, 10, 10),
+                ForeColor = CText,
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            var list = new ListBox
+            {
+                Location = new Point(14, 52),
+                Size = new Size(590, 472),
+                BackColor = Color.FromArgb(18, 18, 18),
+                ForeColor = CText,
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Segoe UI", 9F)
+            };
+            var preview = new PictureBox
+            {
+                Location = new Point(632, 72),
+                Size = new Size(144, 144),
+                BackColor = Color.FromArgb(8, 8, 12),
+                SizeMode = PictureBoxSizeMode.Zoom
+            };
+            var details = new Label
+            {
+                Location = new Point(618, 228),
+                Size = new Size(204, 190),
+                ForeColor = CText,
+                AutoEllipsis = true,
+                TextAlign = ContentAlignment.TopCenter
+            };
+            var select = CreateEditorActionButton("SELECT");
+            select.Location = new Point(686, 492);
+            select.Size = new Size(136, 32);
+            dialog.Controls.AddRange(new Control[] { search, list, preview, details, select });
+
+            List<CashShopItemReference> current = new();
+
+            void RefreshPreview()
+            {
+                Image? old = preview.Image;
+                preview.Image = null;
+                details.Text = string.Empty;
+                int index = list.SelectedIndex;
+                if (index >= 0 && index < current.Count)
+                {
+                    CashShopItemReference item = current[index];
+                    preview.Image = ImageDatabasePreview.TryLoadInterfaceIcon(item.IconId, "Item");
+                    details.Text = $"Item ID {item.Id}\r\n\r\n{item.Name}\r\n\r\nIcon ID {item.IconId}\r\n\r\n{item.Description}";
+                }
+                if (!ReferenceEquals(old, preview.Image)) old?.Dispose();
+            }
+
+            void Refresh()
+            {
+                current = service.SearchItems(search.Text).ToList();
+                list.BeginUpdate();
+                list.Items.Clear();
+                foreach (CashShopItemReference item in current)
+                    list.Items.Add($"{item.Id} — {item.Name} — Item Icon {item.IconId}");
+                list.EndUpdate();
+                if (list.Items.Count > 0) list.SelectedIndex = 0;
+                else RefreshPreview();
+            }
+
+            search.TextChanged += (_, _) => Refresh();
+            list.SelectedIndexChanged += (_, _) => RefreshPreview();
+            select.Click += (_, _) => { if (list.SelectedIndex >= 0) dialog.DialogResult = DialogResult.OK; };
+            list.DoubleClick += (_, _) => { if (list.SelectedIndex >= 0) dialog.DialogResult = DialogResult.OK; };
+            Refresh();
+
+            DialogResult result = dialog.ShowDialog(this);
+            Image? finalImage = preview.Image;
+            preview.Image = null;
+            finalImage?.Dispose();
+
+            return result == DialogResult.OK && list.SelectedIndex >= 0 && list.SelectedIndex < current.Count
+                ? current[list.SelectedIndex]
+                : null;
+        }
+
+'''
+          text = text[:picker_start] + picker_new + text[picker_end:]
+
+          path.write_text(text, encoding='utf-8')
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "DRW Work Tool/Form1.CashShopEditor.cs"
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Improve CashShop template editor interactions"
+            git push origin master
+          fi
