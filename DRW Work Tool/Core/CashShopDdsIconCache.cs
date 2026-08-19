@@ -9,8 +9,8 @@ namespace DRW_Work_Tool.Core
 {
     /// <summary>
     /// Cash Shop icon loader that deliberately uses DDS atlas variants.
-    /// It resolves the icon ID through InterfaceIconMap.json, then opens the
-    /// matching atlas .dds with DdsImageLoader and crops the mapped rectangle.
+    /// It resolves the Cash Shop icon ID through InterfaceIconMap.json, then opens
+    /// the matching atlas .dds with DdsImageLoader and crops the mapped rectangle.
     /// </summary>
     public static class CashShopDdsIconCache
     {
@@ -37,8 +37,10 @@ namespace DRW_Work_Tool.Core
 
                 InterfaceIconMapEntry? mapping = database.InterfaceMap.Icons
                     .Where(x => NormalizeId(x.Id) == normalized)
-                    .OrderByDescending(x => x.Category.Equals("Item", StringComparison.OrdinalIgnoreCase))
-                    .ThenByDescending(x => x.Category.Equals("CashShop", StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(x => x.Category.Equals("CashShop", StringComparison.OrdinalIgnoreCase))
+                    .ThenByDescending(x =>
+                        x.Atlas.Contains("cash", StringComparison.OrdinalIgnoreCase) ||
+                        x.Atlas.Contains("shop", StringComparison.OrdinalIgnoreCase))
                     .FirstOrDefault();
 
                 if (mapping == null)
