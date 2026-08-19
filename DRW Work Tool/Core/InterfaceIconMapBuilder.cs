@@ -20,36 +20,35 @@ namespace DRW_Work_Tool.Core
 
     public static class InterfaceIconMapBuilder
     {
-        private static readonly Regex RxItemAtlas =
-            new Regex(
-                @"^icon(?<n>\d+)$",
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        private static readonly Regex RxItemAtlas = new(
+            @"^icon(?<n>\d+)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-        private static readonly Regex RxSkillAtlas =
-            new Regex(
-                @"^sicon(?<n>\d+)$",
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        private static readonly Regex RxSkillAtlas = new(
+            @"^sicon(?<n>\d+)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-        private static readonly Regex RxCashShopAtlas =
-            new Regex(
-                @"^cashshop(?<g>\d+)_(?<p>\d+)$",
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        private static readonly Regex RxCashShopAtlas = new(
+            @"^cashshop(?<g>\d+)_(?<p>\d+)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
         public static InterfaceIconMapBuildResult BuildAndAnalyze(
             string? databaseRoot = null,
             IProgress<string>? progress = null)
         {
+            progress?.Report("Icon Map: a reconstruir dimensões reais da ImageDatabase...");
+
+            // Always rebuild first. This is important for CashShop because older indexes
+            // incorrectly treated every interface atlas as 32x32 tiles.
+            ImageDatabaseIndexBuilder.Rebuild(databaseRoot);
+
             var service = new ImageDatabaseIndexService(databaseRoot);
-            service.Load(rebuildIndexIfMissing: true);
+            service.Load(rebuildIndexIfMissing: false);
 
             string root = service.DatabaseRoot;
-            progress?.Report("Icon Map: a carregar ImageDatabase.json...");
+            progress?.Report("Icon Map: a gerar mapeamento...");
 
-            var map = new InterfaceIconMapDocument
-            {
-                Version = 1
-            };
-
+            var map = new InterfaceIconMapDocument { Version = 1 };
             var warnings = new List<string>();
             var unmapped = new List<string>();
             var analysis = new StringBuilder();
@@ -60,12 +59,19 @@ namespace DRW_Work_Tool.Core
             analysis.AppendLine($"Database root  : {root}");
             analysis.AppendLine();
             analysis.AppendLine("Regras aplicadas:");
-            analysis.AppendLine("- siconNN  -> base = NN * 1000; mapeia 256 slots (1000..1255, 2000..2255, ...)");
-            analysis.AppendLine("- iconNN   -> base = NN * 1000; mapeia até 1000 slots lógicos (capacidade física pode ser 1024)");
+            analysis.AppendLine("- siconNN  -> base = NN * 1000; até 256 slots");
+            analysis.AppendLine("- iconNN   -> base = NN * 1000; até 1000 slots");
             analysis.AppendLine("- achieve_icon    -> 0..255");
             analysis.AppendLine("- achieve_icon_02 -> 300..555");
             analysis.AppendLine("- achieve_icon_03 -> 556..811");
-            analysis.AppendLine("- cashshopG_PPP   -> base = GPPP00; 100 IDs lógicos (00..99) numa grelha 10x10; atlas físico pode ser 15x15");
+            analysis.AppendLine("- cashshopG_PPP -> base GPPP00; 36 slots sequenciais 00..35; grelha 6x6; tile 80x80");
+            analysis.AppendLine();
+            analysis.AppendLine("CashShop verification:");
+            analysis.AppendLine("- original TGA guides are 480x480");
+            analysis.AppendLine("- suffix 00 = slot 0");
+            analysis.AppendLine("- suffix 10 = slot 10 = col 4,row 1");
+            analysis.AppendLine("- suffix 20 = slot 20 = col 2,row 3");
+            analysis.AppendLine("- suffix 30 = slot 30 = col 0,row 5");
             analysis.AppendLine();
             analysis.AppendLine("Atlases analisados");
             analysis.AppendLine("------------------");
@@ -75,8 +81,7 @@ namespace DRW_Work_Tool.Core
             {
                 progress?.Report($"Icon Map: a analisar {atlas.Name}...");
 
-                AtlasRule? rule = TryResolveRule(atlas, warnings, out string? warning);
-
+                AtlasRule? rule = TryResolveRule(atlas, out string? warning);
                 if (!string.IsNullOrWhiteSpace(warning))
                     warnings.Add($"{atlas.Name}: {warning}");
 
@@ -92,7 +97,8 @@ namespace DRW_Work_Tool.Core
                 analysis.AppendLine(
                     $"{atlas.Name} | Category={rule.Category} | Base={rule.BaseId} | " +
                     $"Mapped={mappedCount} | Capacity={atlas.Capacity} | " +
-                    $"Grid={atlas.Columns}x{atlas.Rows} | Size={atlas.Width}x{atlas.Height}");
+                    $"Grid={atlas.Columns}x{atlas.Rows} | Tile={atlas.TileWidth}x{atlas.TileHeight} | " +
+                    $"Size={atlas.Width}x{atlas.Height}");
 
                 if (!string.IsNullOrWhiteSpace(rule.Note))
                     analysis.AppendLine($"  Note: {rule.Note}");
@@ -110,7 +116,6 @@ namespace DRW_Work_Tool.Core
             ImageDatabaseIndexService.Serialize(mapPath, map);
 
             string analysisPath = Path.Combine(root, "InterfaceIconMap_Analysis.txt");
-
             analysis.AppendLine();
             analysis.AppendLine("Resumo");
             analysis.AppendLine("------");
@@ -118,14 +123,6 @@ namespace DRW_Work_Tool.Core
             analysis.AppendLine($"Unmapped atlases: {unmapped.Count}");
             analysis.AppendLine($"Mapped icons    : {map.Icons.Count}");
             analysis.AppendLine($"Warnings        : {warnings.Count}");
-
-            if (unmapped.Count > 0)
-            {
-                analysis.AppendLine();
-                analysis.AppendLine("Atlases sem regra automática:");
-                foreach (string atlasName in unmapped)
-                    analysis.AppendLine($"- {atlasName}");
-            }
 
             if (warnings.Count > 0)
             {
@@ -150,16 +147,13 @@ namespace DRW_Work_Tool.Core
             };
         }
 
-        private static AtlasRule? TryResolveRule(
-            InterfaceAtlasEntry atlas,
-            List<string> warnings,
-            out string? immediateWarning)
+        private static AtlasRule? TryResolveRule(InterfaceAtlasEntry atlas, out string? warning)
         {
-            immediateWarning = null;
+            warning = null;
 
-            if (atlas.Columns <= 0 || atlas.Rows <= 0 || atlas.TileWidth <= 0 || atlas.TileHeight <= 0)
+            if (atlas.Width <= 0 || atlas.Height <= 0)
             {
-                immediateWarning = "dimensões/grelha inválidas; atlas ignorado.";
+                warning = "dimensões inválidas; atlas ignorado.";
                 return null;
             }
 
@@ -167,62 +161,27 @@ namespace DRW_Work_Tool.Core
             if (mSkill.Success)
             {
                 int n = int.Parse(mSkill.Groups["n"].Value);
-                if (atlas.Capacity != 256)
-                {
-                    immediateWarning =
-                        $"esperado 256 slots físicos para skill atlas, mas o atlas tem {atlas.Capacity}. O mapeamento será truncado para {Math.Min(atlas.Capacity, 256)}.";
-                }
-
+                int count = Math.Min(atlas.Capacity, 256);
                 return new AtlasRule
                 {
                     Category = "Skill",
                     BaseId = n * 1000,
-                    Count = Math.Min(atlas.Capacity, 256),
-                    Note = $"sicon{n:00} => {n * 1000}..{n * 1000 + Math.Min(atlas.Capacity, 256) - 1}"
+                    Count = count,
+                    Columns = atlas.Columns,
+                    TileWidth = atlas.TileWidth,
+                    TileHeight = atlas.TileHeight,
+                    Note = $"sicon{n:00} => {n * 1000}..{n * 1000 + count - 1}"
                 };
             }
 
             if (atlas.Name.Equals("achieve_icon", StringComparison.OrdinalIgnoreCase))
-            {
-                if (atlas.Capacity != 256)
-                    immediateWarning = $"esperado 256 slots físicos para achieve_icon, mas o atlas tem {atlas.Capacity}.";
-
-                return new AtlasRule
-                {
-                    Category = "Achieve",
-                    BaseId = 0,
-                    Count = Math.Min(atlas.Capacity, 256),
-                    Note = "achieve_icon => 0..255"
-                };
-            }
+                return CreateFixedRule("Achieve", 0, Math.Min(atlas.Capacity, 256), atlas, "achieve_icon => 0..255");
 
             if (atlas.Name.Equals("achieve_icon_02", StringComparison.OrdinalIgnoreCase))
-            {
-                if (atlas.Capacity != 256)
-                    immediateWarning = $"esperado 256 slots físicos para achieve_icon_02, mas o atlas tem {atlas.Capacity}.";
-
-                return new AtlasRule
-                {
-                    Category = "Achieve",
-                    BaseId = 300,
-                    Count = Math.Min(atlas.Capacity, 256),
-                    Note = "achieve_icon_02 => 300..555"
-                };
-            }
+                return CreateFixedRule("Achieve", 300, Math.Min(atlas.Capacity, 256), atlas, "achieve_icon_02 => 300..555");
 
             if (atlas.Name.Equals("achieve_icon_03", StringComparison.OrdinalIgnoreCase))
-            {
-                if (atlas.Capacity != 256)
-                    immediateWarning = $"esperado 256 slots físicos para achieve_icon_03, mas o atlas tem {atlas.Capacity}.";
-
-                return new AtlasRule
-                {
-                    Category = "Achieve",
-                    BaseId = 556,
-                    Count = Math.Min(atlas.Capacity, 256),
-                    Note = "achieve_icon_03 => 556..811"
-                };
-            }
+                return CreateFixedRule("Achieve", 556, Math.Min(atlas.Capacity, 256), atlas, "achieve_icon_03 => 556..811");
 
             Match mCash = RxCashShopAtlas.Match(atlas.Name);
             if (mCash.Success)
@@ -230,21 +189,26 @@ namespace DRW_Work_Tool.Core
                 string g = mCash.Groups["g"].Value;
                 string p = mCash.Groups["p"].Value;
                 int baseId = int.Parse($"{g}{p}00");
-                int count = Math.Min(atlas.Capacity, 100);
 
-                if (count < 100)
+                if (atlas.Width != 480 || atlas.Height != 480 ||
+                    atlas.Columns != 6 || atlas.Rows != 6 ||
+                    atlas.TileWidth != 80 || atlas.TileHeight != 80 || atlas.Capacity != 36)
                 {
-                    immediateWarning =
-                        $"CashShop necessita de 100 slots lógicos, mas o atlas só permite mapear {count}.";
+                    warning =
+                        $"geometria CashShop inesperada após rebuild: " +
+                        $"Size={atlas.Width}x{atlas.Height}, Grid={atlas.Columns}x{atlas.Rows}, " +
+                        $"Tile={atlas.TileWidth}x{atlas.TileHeight}, Capacity={atlas.Capacity}.";
                 }
 
                 return new AtlasRule
                 {
                     Category = "CashShop",
                     BaseId = baseId,
-                    Count = count,
-                    LogicalColumns = 10,
-                    Note = $"cashshop{g}_{p} => {baseId}..{baseId + count - 1} | LogicalGrid=10x10 | PhysicalGrid={atlas.Columns}x{atlas.Rows}"
+                    Count = 36,
+                    Columns = 6,
+                    TileWidth = 80,
+                    TileHeight = 80,
+                    Note = $"{atlas.Name} => {baseId}..{baseId + 35} | verified 6x6 / 80x80"
                 };
             }
 
@@ -253,18 +217,14 @@ namespace DRW_Work_Tool.Core
             {
                 int n = int.Parse(mItem.Groups["n"].Value);
                 int count = Math.Min(atlas.Capacity, 1000);
-
-                if (atlas.Capacity > 1000)
-                {
-                    immediateWarning =
-                        $"o atlas físico tem {atlas.Capacity} slots, mas o namespace lógico de icon{n:00} foi limitado a 1000 IDs ({n * 1000}..{n * 1000 + count - 1}).";
-                }
-
                 return new AtlasRule
                 {
                     Category = "Item",
                     BaseId = n * 1000,
                     Count = count,
+                    Columns = atlas.Columns,
+                    TileWidth = atlas.TileWidth,
+                    TileHeight = atlas.TileHeight,
                     Note = $"icon{n:00} => {n * 1000}..{n * 1000 + count - 1}"
                 };
             }
@@ -272,42 +232,54 @@ namespace DRW_Work_Tool.Core
             return null;
         }
 
+        private static AtlasRule CreateFixedRule(
+            string category,
+            int baseId,
+            int count,
+            InterfaceAtlasEntry atlas,
+            string note) => new()
+        {
+            Category = category,
+            BaseId = baseId,
+            Count = count,
+            Columns = atlas.Columns,
+            TileWidth = atlas.TileWidth,
+            TileHeight = atlas.TileHeight,
+            Note = note
+        };
+
         private static int AddEntries(
             InterfaceIconMapDocument document,
             InterfaceAtlasEntry atlas,
             AtlasRule rule)
         {
-            int count = Math.Min(rule.Count, atlas.Capacity);
-            int columns = rule.LogicalColumns > 0 ? rule.LogicalColumns : atlas.Columns;
+            int added = 0;
 
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < rule.Count; i++)
             {
-                int column = i % columns;
-                int row = i / columns;
+                int column = i % rule.Columns;
+                int row = i / rule.Columns;
+                int x = column * rule.TileWidth;
+                int y = row * rule.TileHeight;
 
-                int x = column * atlas.TileWidth;
-                int y = row * atlas.TileHeight;
-
-                if (x + atlas.TileWidth > atlas.Width || y + atlas.TileHeight > atlas.Height)
+                if (x + rule.TileWidth > atlas.Width || y + rule.TileHeight > atlas.Height)
                     break;
 
-                document.Icons.Add(
-                    new InterfaceIconMapEntry
-                    {
-                        Id = (rule.BaseId + i).ToString(),
-                        Atlas = atlas.Name,
-                        X = x,
-                        Y = y,
-                        Width = atlas.TileWidth,
-                        Height = atlas.TileHeight,
-                        Category = rule.Category,
-                        Note = $"AutoMap | SlotIndex={i} | Base={rule.BaseId} | Columns={columns}"
-                    });
+                document.Icons.Add(new InterfaceIconMapEntry
+                {
+                    Id = (rule.BaseId + i).ToString(),
+                    Atlas = atlas.Name,
+                    X = x,
+                    Y = y,
+                    Width = rule.TileWidth,
+                    Height = rule.TileHeight,
+                    Category = rule.Category,
+                    Note = $"AutoMap | SlotIndex={i} | Base={rule.BaseId} | Columns={rule.Columns}"
+                });
+                added++;
             }
 
-            return document.Icons.Count(x =>
-                x.Atlas.Equals(atlas.Name, StringComparison.OrdinalIgnoreCase) &&
-                x.Category.Equals(rule.Category, StringComparison.OrdinalIgnoreCase));
+            return added;
         }
 
         private static ulong ParseSortableId(string id) =>
@@ -318,7 +290,9 @@ namespace DRW_Work_Tool.Core
             public string Category { get; init; } = string.Empty;
             public int BaseId { get; init; }
             public int Count { get; init; }
-            public int LogicalColumns { get; init; }
+            public int Columns { get; init; }
+            public int TileWidth { get; init; }
+            public int TileHeight { get; init; }
             public string Note { get; init; } = string.Empty;
         }
     }
