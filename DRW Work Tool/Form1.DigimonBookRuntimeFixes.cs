@@ -2,17 +2,21 @@ using DRW_Work_Tool.Core;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Xml.Linq;
 
 namespace DRW_Work_Tool
 {
     public partial class Form1
     {
         private readonly HashSet<Control> _digimonBookScrollWired = new();
+        private readonly HashSet<DigimonBookTabState> _digimonBookInitialScrollDone = new();
+        private readonly HashSet<PictureBox> _digimonBookBookInfoIconWired = new();
         private bool _digimonBookRuntimeHooksInstalled;
 
         private void InstallDigimonBookRuntimeHooks()
@@ -45,11 +49,41 @@ namespace DRW_Work_Tool
             if (!_digimonBookScrollWired.Contains(state.Content))
             {
                 _digimonBookScrollWired.Add(state.Content);
-                state.Content.ControlAdded += (_, _) => BeginInvoke(new Action(() => FixDigimonBookScrollAndCards(state)));
-                state.Content.Resize += (_, _) => BeginInvoke(new Action(() => FixDigimonBookScrollAndCards(state)));
+                state.Content.ControlAdded += (_, _) =>
+                {
+                    if (!state.Content.IsDisposed)
+                        BeginInvoke(new Action(() => PrepareDigimonBookPage(page)));
+                };
+                state.Content.Resize += (_, _) =>
+                {
+                    if (!state.Content.IsDisposed)
+                        BeginInvoke(new Action(() => FixDigimonBookScrollAndCards(state)));
+                };
             }
 
             FixDigimonBookScrollAndCards(state);
+            WireBookInfoIconPickers(page, state);
+
+            if (_digimonBookInitialScrollDone.Add(state))
+            {
+                BeginInvoke(new Action(() => ResetDigimonBookScrollToTop(state)));
+            }
+        }
+
+        private void ResetDigimonBookScrollToTop(DigimonBookTabState state)
+        {
+            if (state.Content.IsDisposed) return;
+            FlowLayoutPanel? list = state.Content.Controls.OfType<FlowLayoutPanel>().FirstOrDefault();
+            if (list == null || list.IsDisposed) return;
+
+            list.AutoScrollPosition = Point.Empty;
+            if (list.VerticalScroll.Visible)
+            {
+                try { list.VerticalScroll.Value = list.VerticalScroll.Minimum; }
+                catch { }
+            }
+            list.PerformLayout();
+            list.Invalidate(true);
         }
 
         private void ReplaceDigimonBookImportButton(TabPage page)
@@ -85,23 +119,28 @@ namespace DRW_Work_Tool
             list.WrapContents = false;
             list.FlowDirection = FlowDirection.TopDown;
             list.TabStop = true;
-            list.Padding = new Padding(0, 0, 10, 18);
+            list.Padding = new Padding(0, 8, 10, 28);
 
             WireWheelFocus(list, list);
             foreach (Control child in list.Controls)
                 WireWheelFocus(child, list);
 
-            int usableWidth = Math.Max(705, list.ClientSize.Width - list.Padding.Horizontal - 18);
+            int usableWidth = Math.Max(680, list.ClientSize.Width - list.Padding.Horizontal - 18);
             int totalHeight = list.Padding.Top + list.Padding.Bottom;
 
             foreach (Panel card in list.Controls.OfType<Panel>())
             {
                 card.Width = usableWidth;
-                ExpandDigimonBookDescription(card);
-                int needed = card.Controls.Count == 0 ? card.Height : card.Controls.Cast<Control>().Max(x => x.Bottom) + 14;
-                if (needed > card.Height) card.Height = needed;
 
-                foreach (Button b in card.Controls.OfType<Button>().Where(x => x.Text.StartsWith("EDIT", StringComparison.OrdinalIgnoreCase)))
+                // Cards are now sized correctly when they are created in Form1.DigimonBookEditor.cs.
+                // Do not expand/move their children again here; that was the source of clipped first cards.
+                int needed = card.Controls.Count == 0
+                    ? card.Height
+                    : card.Controls.Cast<Control>().Max(x => x.Bottom) + 14;
+                card.Height = Math.Max(card.Height, needed);
+
+                foreach (Button b in card.Controls.OfType<Button>()
+                    .Where(x => x.Text.StartsWith("EDIT", StringComparison.OrdinalIgnoreCase)))
                 {
                     b.Anchor = AnchorStyles.Top | AnchorStyles.Right;
                     b.Left = Math.Max(8, card.ClientSize.Width - b.Width - 18);
@@ -113,29 +152,83 @@ namespace DRW_Work_Tool
             list.AutoScrollMinSize = new Size(0, Math.Max(0, totalHeight));
         }
 
-        private void ExpandDigimonBookDescription(Panel card)
+        private void WireBookInfoIconPickers(TabPage page, DigimonBookTabState state)
         {
-            Label? description = card.Controls.OfType<Label>()
-                .Where(x => x.Width >= 400 && x.Top >= 50 && x.Top <= 80 && x.Text.Length > 45)
-                .OrderBy(x => x.Top)
-                .FirstOrDefault();
-            if (description == null || Equals(description.Tag, "DigimonBookExpanded")) return;
+            if (!state.FileName.Equals("BookInfo.xml", StringComparison.OrdinalIgnoreCase) ||
+                !File.Exists(state.XmlPath) || state.Content.IsDisposed)
+                return;
 
-            description.Tag = "DigimonBookExpanded";
-            int oldBottom = description.Bottom;
-            Size measured = TextRenderer.MeasureText(
-                description.Text,
-                description.Font,
-                new Size(Math.Max(120, description.Width - 4), 1000),
-                TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl);
-            int newHeight = Math.Max(description.Height, Math.Min(220, measured.Height + 6));
-            int delta = newHeight - description.Height;
-            if (delta <= 0) return;
+            FlowLayoutPanel? list = state.Content.Controls.OfType<FlowLayoutPanel>().FirstOrDefault();
+            if (list == null || list.IsDisposed) return;
 
-            description.Height = newHeight;
-            foreach (Control c in card.Controls.Cast<Control>().Where(x => !ReferenceEquals(x, description) && x.Top >= oldBottom + 1).ToArray())
-                c.Top += delta;
-            card.Height += delta;
+            List<XElement> rows;
+            try
+            {
+                rows = (XDocument.Load(state.XmlPath, LoadOptions.PreserveWhitespace)
+                    .Root?.Elements("BookInfo") ?? Enumerable.Empty<XElement>()).ToList();
+            }
+            catch
+            {
+                return;
+            }
+
+            Panel[] cards = list.Controls.OfType<Panel>().ToArray();
+            int count = Math.Min(rows.Count, cards.Length);
+
+            for (int i = 0; i < count; i++)
+            {
+                XElement row = rows[i];
+                PictureBox? icon = cards[i].Controls.OfType<PictureBox>().FirstOrDefault();
+                if (icon == null || icon.IsDisposed || !_digimonBookBookInfoIconWired.Add(icon))
+                    continue;
+
+                uint optionId = U(row, "s_dwOptID");
+                icon.Cursor = Cursors.Hand;
+                editorToolTip.SetToolTip(icon, "Click to select the BookInfo icon from sicon01-sicon07.");
+
+                icon.Click += async (_, _) =>
+                {
+                    if (page.IsDisposed || state.Content.IsDisposed) return;
+
+                    uint currentIcon = 0;
+                    try
+                    {
+                        XDocument latest = XDocument.Load(state.XmlPath, LoadOptions.PreserveWhitespace);
+                        XElement? currentRow = latest.Root?.Elements("BookInfo")
+                            .FirstOrDefault(x => U(x, "s_dwOptID") == optionId);
+                        if (currentRow != null)
+                            currentIcon = U(currentRow, "s_nIcon");
+                    }
+                    catch { }
+
+                    uint? selected = await OpenSkillAtlasIconBrowserAsync(
+                        currentIcon,
+                        $"BookInfo Option {optionId} — Select Icon");
+
+                    if (!selected.HasValue || page.IsDisposed) return;
+
+                    try
+                    {
+                        XDocument doc = XDocument.Load(state.XmlPath, LoadOptions.PreserveWhitespace);
+                        XElement? target = doc.Root?.Elements("BookInfo")
+                            .FirstOrDefault(x => U(x, "s_dwOptID") == optionId);
+                        if (target == null)
+                            throw new InvalidDataException($"BookInfo Option ID {optionId} was not found.");
+
+                        BookSet(target, "s_nIcon", selected.Value.ToString(CultureInfo.InvariantCulture));
+                        File.Copy(state.XmlPath, state.XmlPath + ".editor.bak", true);
+                        doc.Save(state.XmlPath);
+
+                        _digimonBookInitialScrollDone.Remove(state);
+                        BuildDigimonBookCards(state);
+                        PrepareDigimonBookPage(page);
+                    }
+                    catch (Exception ex)
+                    {
+                        ShowEditorError("BookInfo Icon", ex);
+                    }
+                };
+            }
         }
 
         private void WireWheelFocus(Control control, FlowLayoutPanel list)
@@ -184,9 +277,18 @@ namespace DRW_Work_Tool
             editorTabs.TabPages.Add(page);
             editorTabs.SelectedTab = page;
 
-            using var cts = new CancellationTokenSource();
-            EventHandler disposed = (_, _) => { if (!cts.IsCancellationRequested) cts.Cancel(); };
+            var cts = new CancellationTokenSource();
+            EventHandler? disposed = null;
+            disposed = (_, _) =>
+            {
+                if (!cts.IsCancellationRequested)
+                {
+                    try { cts.Cancel(); }
+                    catch (ObjectDisposedException) { }
+                }
+            };
             page.Disposed += disposed;
+
             var progress = new Progress<string>(line =>
             {
                 if (page.IsDisposed) return;
@@ -212,7 +314,11 @@ namespace DRW_Work_Tool
             }
             catch (OperationCanceledException)
             {
-                if (!page.IsDisposed) { status.Text = "Cancelled — transaction rolled back."; status.ForeColor = Color.FromArgb(255, 190, 90); }
+                if (!page.IsDisposed)
+                {
+                    status.Text = "Cancelled — transaction rolled back.";
+                    status.ForeColor = Color.FromArgb(255, 190, 90);
+                }
             }
             catch (Exception ex)
             {
@@ -226,7 +332,9 @@ namespace DRW_Work_Tool
             }
             finally
             {
-                if (!page.IsDisposed) page.Disposed -= disposed;
+                if (!page.IsDisposed && disposed != null)
+                    page.Disposed -= disposed;
+                cts.Dispose();
             }
         }
     }
