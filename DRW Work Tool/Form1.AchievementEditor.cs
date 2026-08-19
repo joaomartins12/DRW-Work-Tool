@@ -12,7 +12,7 @@ namespace DRW_Work_Tool
 {
     public partial class Form1
     {
-        private const int AchievementCardsPerPage = 24;
+        private const int AchievementCardsPerPage = 30;
 
         private sealed class AchievementService
         {
@@ -265,6 +265,9 @@ namespace DRW_Work_Tool
             public required FlowLayoutPanel Results { get; init; }
             public required TextBox Search { get; init; }
             public required Label Count { get; init; }
+            public required Button Previous { get; init; }
+            public required Button Next { get; init; }
+            public required Label PageInfo { get; init; }
             public int PageIndex { get; set; }
             public List<XElement> Filtered { get; set; } = new();
         }
@@ -310,7 +313,7 @@ namespace DRW_Work_Tool
         {
             page.Controls.Clear();
             var root = new Panel { Dock = DockStyle.Fill, BackColor = CEditor, Padding = new Padding(18) };
-            var header = new Panel { Dock = DockStyle.Top, Height = 112, BackColor = CEditor };
+            var header = new Panel { Dock = DockStyle.Top, Height = 146, BackColor = CEditor };
             var title = new Label { Text = "Achievement / Title Editor", ForeColor = CText,
                 Font = new Font("Segoe UI Semibold", 14F, FontStyle.Bold), Location = new Point(8, 4), AutoSize = true };
             var sub = new Label { Text = $"{service.Records.Count:N0} titles • Achieve icons • Buff.xml • title quests only",
@@ -321,23 +324,48 @@ namespace DRW_Work_Tool
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
             var create = CreateEditorActionButton("NEW TITLE");
             create.Size = new Size(130, 34); create.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            var count = new Label { ForeColor = CMuted, AutoSize = true, Location = new Point(10, 96) };
+            var count = new Label { ForeColor = CMuted, AutoSize = true, Location = new Point(10, 104) };
+            var previous = CreateEditorActionButton("◀ PREVIOUS");
+            previous.Size = new Size(112, 30);
+            previous.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            var pageInfo = new Label { ForeColor = CText, Size = new Size(82, 30), TextAlign = ContentAlignment.MiddleCenter, Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            var next = CreateEditorActionButton("NEXT ▶");
+            next.Size = new Size(96, 30);
+            next.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             var results = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, FlowDirection = FlowDirection.TopDown,
                 WrapContents = false, BackColor = CEditor, Padding = new Padding(4, 8, 16, 8) };
             DarkUi.ApplyDarkScrollBar(results);
-            header.Controls.AddRange(new Control[] { title, sub, search, create, count });
+            header.Controls.AddRange(new Control[] { title, sub, search, create, count, previous, pageInfo, next });
             root.Controls.Add(results); root.Controls.Add(header); page.Controls.Add(root);
-            var state = new AchievementBrowseState { Service = service, Results = results, Search = search, Count = count };
+            var state = new AchievementBrowseState { Service = service, Results = results, Search = search, Count = count, Previous = previous, Next = next, PageInfo = pageInfo };
             page.Tag = state;
 
             void Layout()
             {
                 create.Location = new Point(Math.Max(150, header.ClientSize.Width - create.Width - 8), 6);
                 search.Width = Math.Max(220, header.ClientSize.Width - 16);
+                next.Location = new Point(Math.Max(300, header.ClientSize.Width - next.Width - 8), 108);
+                pageInfo.Location = new Point(next.Left - pageInfo.Width - 8, 108);
+                previous.Location = new Point(pageInfo.Left - previous.Width - 8, 108);
             }
             header.Resize += (_, _) => Layout();
             results.Resize += (_, _) => ResizeAchievementCards(results);
-            search.TextChanged += (_, _) => RefreshAchievementBrowser(state);
+            search.TextChanged += (_, _) => { state.PageIndex = 0; RefreshAchievementBrowser(state); };
+            previous.Click += (_, _) =>
+            {
+                if (state.PageIndex <= 0) return;
+                state.PageIndex--;
+                RefreshAchievementBrowser(state);
+                state.Results.AutoScrollPosition = Point.Empty;
+            };
+            next.Click += (_, _) =>
+            {
+                int pages = Math.Max(1, (int)Math.Ceiling(state.Filtered.Count / (double)AchievementCardsPerPage));
+                if (state.PageIndex >= pages - 1) return;
+                state.PageIndex++;
+                RefreshAchievementBrowser(state);
+                state.Results.AutoScrollPosition = Point.Empty;
+            };
             create.Click += (_, _) => OpenAchievementEditTab(service, service.CreateNewNode(), null, true);
             Layout(); RefreshAchievementBrowser(state);
         }
@@ -349,11 +377,18 @@ namespace DRW_Work_Tool
                 .Where(x => q.Length == 0 || x.ToString(SaveOptions.DisableFormatting)
                     .Contains(q, StringComparison.OrdinalIgnoreCase))
                 .ToList();
-            state.Results.SuspendLayout(); state.Results.Controls.Clear();
-            foreach (XElement node in state.Filtered.Take(300))
+            int pages = Math.Max(1, (int)Math.Ceiling(state.Filtered.Count / (double)AchievementCardsPerPage));
+            state.PageIndex = Math.Clamp(state.PageIndex, 0, pages - 1);
+            state.Results.SuspendLayout();
+            DisposeAchievementCardImages(state.Results);
+            state.Results.Controls.Clear();
+            foreach (XElement node in state.Filtered.Skip(state.PageIndex * AchievementCardsPerPage).Take(AchievementCardsPerPage))
                 state.Results.Controls.Add(CreateAchievementCard(state, node));
             state.Results.ResumeLayout();
-            state.Count.Text = $"Results: {state.Filtered.Count:N0} / {state.Service.Records.Count:N0}";
+            state.Count.Text = $"Results: {state.Filtered.Count:N0} / {state.Service.Records.Count:N0} • 30 cards per page";
+            state.PageInfo.Text = $"{state.PageIndex + 1} / {pages}";
+            state.Previous.Enabled = state.PageIndex > 0;
+            state.Next.Enabled = state.PageIndex < pages - 1;
             ResizeAchievementCards(state.Results);
         }
 
@@ -370,7 +405,7 @@ namespace DRW_Work_Tool
                 BackColor = Color.FromArgb(29,29,29), Margin = new Padding(0,0,0,8) };
             card.Paint += (_, e) => { using var p = new Pen(Color.FromArgb(70,70,70)); e.Graphics.DrawRectangle(p,0,0,card.Width-1,card.Height-1); };
             var icon = new PictureBox { Location = new Point(12,12), Size = new Size(78,78), BackColor = Color.Black,
-                SizeMode = PictureBoxSizeMode.Zoom, Image = ImageDatabasePreview.TryLoadInterfaceIcon(iconId, "Achieve") };
+                SizeMode = PictureBoxSizeMode.Zoom, Image = AchievementIconAtlasCache.TryLoad(iconId) };
             var main = new Label { Text = string.IsNullOrWhiteSpace(titleText) ? name : titleText, ForeColor = CText,
                 Font = new Font("Segoe UI Semibold", 10F, FontStyle.Bold), Location = new Point(104,10), Size = new Size(430,24), AutoEllipsis = true };
             var info = new Label { Text = $"Quest {questId} • Icon {iconId} • Type {AchievementText(node,"s_nType")} • Group {AchievementText(node,"s_nGroup")}/{AchievementText(node,"s_nSubGroup")}",
@@ -496,7 +531,7 @@ namespace DRW_Work_Tool
             void RefreshRefs()
             {
                 uint iconId = uint.TryParse(fields["s_nIcon"].Text, out uint i) ? i : 0;
-                Image? old = icon.Image; icon.Image = ImageDatabasePreview.TryLoadInterfaceIcon(iconId, "Achieve"); old?.Dispose();
+                Image? old = icon.Image; icon.Image = AchievementIconAtlasCache.TryLoad(iconId); old?.Dispose();
                 uint buffId = uint.TryParse(fields["s_nBuffCode"].Text, out uint b) ? b : 0; buffStatus.Text = service.BuffSummary(buffId);
                 uint qid = uint.TryParse(fields["s_nQuestID"].Text, out uint q) ? q : 0; XElement? quest = service.Quest(qid);
                 questStatus.Text = quest == null ? $"Quest {qid}: not found" : $"Quest {qid}: {AchievementText(quest,"TitleText")} • Type {AchievementText(quest,"Type")}";

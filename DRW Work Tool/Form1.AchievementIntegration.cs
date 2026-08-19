@@ -215,7 +215,7 @@ namespace DRW_Work_Tool
             var header = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 112,
+                Height = 146,
                 BackColor = CEditor
             };
 
@@ -255,8 +255,24 @@ namespace DRW_Work_Tool
             {
                 ForeColor = CMuted,
                 AutoSize = true,
-                Location = new Point(10, 96)
+                Location = new Point(10, 104)
             };
+
+            var previous = CreateEditorActionButton("◀ PREVIOUS");
+            previous.Size = new Size(112, 30);
+            previous.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+
+            var pageInfo = new Label
+            {
+                ForeColor = CText,
+                Size = new Size(82, 30),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right
+            };
+
+            var next = CreateEditorActionButton("NEXT ▶");
+            next.Size = new Size(96, 30);
+            next.Anchor = AnchorStyles.Top | AnchorStyles.Right;
 
             var results = new FlowLayoutPanel
             {
@@ -277,7 +293,10 @@ namespace DRW_Work_Tool
                 sub,
                 search,
                 create,
-                count
+                count,
+                previous,
+                pageInfo,
+                next
             });
 
             root.Controls.Add(results);
@@ -290,7 +309,10 @@ namespace DRW_Work_Tool
                 Service = service,
                 Results = results,
                 Search = search,
-                Count = count
+                Count = count,
+                Previous = previous,
+                Next = next,
+                PageInfo = pageInfo
             };
 
             page.Tag = state;
@@ -302,13 +324,54 @@ namespace DRW_Work_Tool
                     6);
 
                 search.Width = Math.Max(220, header.ClientSize.Width - 16);
+
+                next.Location = new Point(
+                    Math.Max(300, header.ClientSize.Width - next.Width - 8),
+                    108);
+
+                pageInfo.Location = new Point(
+                    next.Left - pageInfo.Width - 8,
+                    108);
+
+                previous.Location = new Point(
+                    pageInfo.Left - previous.Width - 8,
+                    108);
             }
 
             header.Resize += (_, _) => Layout();
             results.Resize += (_, _) => ResizeAchievementCards(results);
 
             search.TextChanged += async (_, _) =>
+            {
+                state.PageIndex = 0;
                 await RefreshPreparedAchievementBrowserAsync(state);
+            };
+
+            previous.Click += async (_, _) =>
+            {
+                if (state.PageIndex <= 0)
+                    return;
+
+                state.PageIndex--;
+                await RefreshPreparedAchievementBrowserAsync(state);
+                state.Results.AutoScrollPosition = Point.Empty;
+            };
+
+            next.Click += async (_, _) =>
+            {
+                int pages = Math.Max(
+                    1,
+                    (int)Math.Ceiling(
+                        state.Filtered.Count /
+                        (double)AchievementCardsPerPage));
+
+                if (state.PageIndex >= pages - 1)
+                    return;
+
+                state.PageIndex++;
+                await RefreshPreparedAchievementBrowserAsync(state);
+                state.Results.AutoScrollPosition = Point.Empty;
+            };
 
             create.Click += (_, _) =>
                 OpenAchievementEditTab(
@@ -364,11 +427,27 @@ namespace DRW_Work_Tool
             state.Results.Controls.Clear();
             state.Results.ResumeLayout(false);
 
-            const int batchSize = 32;
+            int pages = Math.Max(
+                1,
+                (int)Math.Ceiling(
+                    state.Filtered.Count /
+                    (double)AchievementCardsPerPage));
 
-            for (int index = 0; index < state.Filtered.Count; index++)
+            state.PageIndex = Math.Clamp(
+                state.PageIndex,
+                0,
+                pages - 1);
+
+            List<XElement> pageRecords = state.Filtered
+                .Skip(state.PageIndex * AchievementCardsPerPage)
+                .Take(AchievementCardsPerPage)
+                .ToList();
+
+            const int batchSize = 10;
+
+            for (int index = 0; index < pageRecords.Count; index++)
             {
-                XElement node = state.Filtered[index];
+                XElement node = pageRecords[index];
                 state.Results.Controls.Add(
                     CreatePreparedAchievementCard(state, node));
 
@@ -381,10 +460,20 @@ namespace DRW_Work_Tool
             }
 
             state.Count.Text =
-                $"Results: {state.Filtered.Count:N0} / {state.Service.Records.Count:N0}";
+                $"Results: {state.Filtered.Count:N0} / {state.Service.Records.Count:N0} • 30 cards per page";
+
+            state.PageInfo.Text =
+                $"{state.PageIndex + 1} / {pages}";
+
+            state.Previous.Enabled =
+                state.PageIndex > 0;
+
+            state.Next.Enabled =
+                state.PageIndex < pages - 1;
 
             ResizeAchievementCards(state.Results);
             state.Results.PerformLayout();
+            ApplyPreparedAchievementIcons(state);
         }
 
         private Control CreatePreparedAchievementCard(
