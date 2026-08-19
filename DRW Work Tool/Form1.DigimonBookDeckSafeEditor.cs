@@ -98,11 +98,28 @@ namespace DRW_Work_Tool
             };
             page.Controls.Add(root);
 
+            // Fixed three-row layout keeps the header, editor body and SAVE action
+            // independent. The SplitContainer can never cover the footer.
+            var shell = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = CEditor,
+                ColumnCount = 1,
+                RowCount = 3,
+                Margin = Padding.Empty,
+                Padding = Padding.Empty
+            };
+            shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            shell.RowStyles.Add(new RowStyle(SizeType.Absolute, 58F));
+            shell.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            shell.RowStyles.Add(new RowStyle(SizeType.Absolute, 52F));
+            root.Controls.Add(shell);
+
             var header = new Panel
             {
-                Dock = DockStyle.Top,
-                Height = 58,
-                BackColor = CEditor
+                Dock = DockStyle.Fill,
+                BackColor = CEditor,
+                Margin = Padding.Empty
             };
             var title = L($"Deck Composition — Group {groupId}", 0, 2, 520, 28, true);
             title.Font = new Font("Segoe UI Semibold", 13F, FontStyle.Bold);
@@ -110,7 +127,7 @@ namespace DRW_Work_Tool
             header.Controls.Add(L(
                 "Select Digimon from Digimon_List.xml • preview resolves ModelID → Model.xml → Data\\Digimon.",
                 0, 31, 760, 22, false, Color.FromArgb(120, 220, 145)));
-            root.Controls.Add(header);
+            shell.Controls.Add(header, 0, 0);
 
             var body = new SplitContainer
             {
@@ -118,10 +135,10 @@ namespace DRW_Work_Tool
                 Orientation = Orientation.Vertical,
                 BackColor = CEditor,
                 FixedPanel = FixedPanel.None,
-                IsSplitterFixed = false
+                IsSplitterFixed = false,
+                Margin = Padding.Empty
             };
-            root.Controls.Add(body);
-            body.BringToFront();
+            shell.Controls.Add(body, 0, 1);
 
             void ApplySafeSplitter()
             {
@@ -132,7 +149,6 @@ namespace DRW_Work_Tool
 
                 int desiredRight = Math.Max(260, Math.Min(360, width / 3));
                 int desiredLeft = width - desiredRight;
-
                 int minLeft = Math.Min(360, Math.Max(120, width / 3));
                 int minRight = Math.Min(240, Math.Max(100, width / 4));
 
@@ -152,7 +168,6 @@ namespace DRW_Work_Tool
                 if (maximum >= minimum)
                     body.SplitterDistance = target;
             }
-
             body.SizeChanged += (_, _) => ApplySafeSplitter();
 
             var members = new DataGridView
@@ -170,7 +185,12 @@ namespace DRW_Work_Tool
             foreach (string h in new[] { "BaseDigimonID", "BaseName", "EvolSlot", "DestDigimonID", "DestName" })
                 members.Columns.Add(h, h);
             foreach (XElement m in original.Elements("DeckDigimon"))
-                members.Rows.Add(T(m, "s_dwBaseDigimonID"), T(m, "s_szBaseDigimonName"), T(m, "s_nEvolslot"), T(m, "s_dwDestDigimonID"), T(m, "s_szDestDigimonName"));
+                members.Rows.Add(
+                    T(m, "s_dwBaseDigimonID"),
+                    T(m, "s_szBaseDigimonName"),
+                    T(m, "s_nEvolslot"),
+                    T(m, "s_dwDestDigimonID"),
+                    T(m, "s_szDestDigimonName"));
             body.Panel1.Controls.Add(members);
 
             var memberButtons = new FlowLayoutPanel
@@ -182,8 +202,10 @@ namespace DRW_Work_Tool
                 BackColor = CEditor,
                 Padding = new Padding(0, 5, 0, 0)
             };
-            var addMember = CreateEditorActionButton("ADD MEMBER"); addMember.Size = new Size(110, 30);
-            var removeMember = CreateEditorActionButton("REMOVE"); removeMember.Size = new Size(92, 30);
+            var addMember = CreateEditorActionButton("ADD MEMBER");
+            addMember.Size = new Size(110, 30);
+            var removeMember = CreateEditorActionButton("REMOVE");
+            removeMember.Size = new Size(92, 30);
             memberButtons.Controls.AddRange(new Control[] { addMember, removeMember });
             body.Panel1.Controls.Add(memberButtons);
             memberButtons.BringToFront();
@@ -234,8 +256,10 @@ namespace DRW_Work_Tool
             selectedLabel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             right.Controls.Add(selectedLabel);
 
-            var setBase = CreateEditorActionButton("SET BASE"); setBase.Size = new Size(100, 30);
-            var setDest = CreateEditorActionButton("SET DEST"); setDest.Size = new Size(100, 30);
+            var setBase = CreateEditorActionButton("SET BASE");
+            setBase.Size = new Size(100, 30);
+            var setDest = CreateEditorActionButton("SET DEST");
+            setDest.Size = new Size(100, 30);
             setBase.Anchor = setDest.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
             right.Controls.AddRange(new Control[] { setBase, setDest });
 
@@ -271,22 +295,29 @@ namespace DRW_Work_Tool
                     : null;
 
                 Image? old = preview.Image;
+                preview.Image = null;
+                old?.Dispose();
                 preview.Image = selectedDigimon == null
                     ? null
                     : DigimonBookDigimonCatalog.TryLoadIcon(selectedDigimon.Id);
-                old?.Dispose();
 
                 selectedLabel.Text = selectedDigimon == null
                     ? "Select a Digimon."
                     : $"{selectedDigimon.Id} — {selectedDigimon.Name}\r\nModelID {selectedDigimon.ModelId}";
             }
 
-            search.TextChanged += (_, _) => { FillResults(); RefreshSelected(); };
+            search.TextChanged += (_, _) =>
+            {
+                FillResults();
+                RefreshSelected();
+            };
             results.SelectionChanged += (_, _) => RefreshSelected();
 
             DataGridViewRow EnsureMemberRow()
             {
-                if (members.SelectedRows.Count > 0) return members.SelectedRows[0];
+                if (members.SelectedRows.Count > 0)
+                    return members.SelectedRows[0];
+
                 int index = members.Rows.Add("0", "", "0", "0", "");
                 members.Rows[index].Selected = true;
                 return members.Rows[index];
@@ -321,52 +352,80 @@ namespace DRW_Work_Tool
                     members.Rows.Remove(members.SelectedRows[0]);
             };
 
-            var save = CreateEditorActionButton("SAVE DECK");
-            save.Size = new Size(120, 34);
-            save.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
-            save.Click += (_, _) =>
+            var footer = new Panel
             {
-                XDocument latest = XDocument.Load(sourceState.XmlPath, LoadOptions.PreserveWhitespace);
-                XElement? target = latest.Root?.Elements("DeckComposition")
-                    .FirstOrDefault(x => U(x, "s_nGroupIdx") == groupId);
-                if (target == null) return;
-
-                target.Elements("DeckDigimon").Remove();
-                foreach (DataGridViewRow row in members.Rows)
-                {
-                    if (row.IsNewRow) continue;
-                    var node = new XElement("DeckDigimon",
-                        new XElement("s_dwBaseDigimonID", Convert.ToString(row.Cells[0].Value, CultureInfo.InvariantCulture) ?? "0"),
-                        new XElement("s_szBaseDigimonName", Convert.ToString(row.Cells[1].Value, CultureInfo.InvariantCulture) ?? string.Empty),
-                        new XElement("s_nEvolslot", Convert.ToString(row.Cells[2].Value, CultureInfo.InvariantCulture) ?? "0"),
-                        new XElement("s_dwDestDigimonID", Convert.ToString(row.Cells[3].Value, CultureInfo.InvariantCulture) ?? "0"),
-                        new XElement("s_szDestDigimonName", Convert.ToString(row.Cells[4].Value, CultureInfo.InvariantCulture) ?? string.Empty));
-                    target.Add(node);
-                }
-
-                System.IO.File.Copy(sourceState.XmlPath, sourceState.XmlPath + ".editor.bak", true);
-                latest.Save(sourceState.XmlPath);
-                BuildDigimonBookCards(sourceState);
-
-                TabPage? sourcePage = editorTabs.TabPages.Cast<TabPage>()
-                    .FirstOrDefault(x => ReferenceEquals(x.Tag, sourceState));
-                if (sourcePage != null)
-                {
-                    ApplyDigimonBookStableLayout(sourcePage, sourceState);
-                    EnhanceDigimonBookInternalEditors(sourcePage, sourceState);
-                    EnhanceDigimonBookSafeDeckButtons(sourcePage, sourceState);
-                }
-                editorTabs.SelectedTab = sourcePage ?? page;
+                Dock = DockStyle.Fill,
+                BackColor = CEditor,
+                Margin = Padding.Empty,
+                Padding = new Padding(0, 8, 0, 0)
             };
-            root.Controls.Add(save);
+            shell.Controls.Add(footer, 0, 2);
+
+            var save = CreateEditorActionButton("SAVE DECK");
+            save.Name = "DigimonBookDeckSave";
+            save.Size = new Size(130, 34);
+            save.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            footer.Controls.Add(save);
 
             void LayoutSave()
             {
                 save.Location = new Point(
-                    Math.Max(0, root.ClientSize.Width - save.Width - 18),
-                    Math.Max(0, root.ClientSize.Height - save.Height - 18));
+                    Math.Max(0, footer.ClientSize.Width - save.Width),
+                    8);
+                save.Visible = true;
+                save.Enabled = true;
+                save.BringToFront();
             }
-            root.Resize += (_, _) => LayoutSave();
+            footer.Resize += (_, _) => LayoutSave();
+
+            save.Click += (_, _) =>
+            {
+                try
+                {
+                    XDocument latest = XDocument.Load(sourceState.XmlPath, LoadOptions.PreserveWhitespace);
+                    XElement? target = latest.Root?.Elements("DeckComposition")
+                        .FirstOrDefault(x => U(x, "s_nGroupIdx") == groupId);
+                    if (target == null)
+                    {
+                        MessageBox.Show("The deck group no longer exists in DeckComposition.xml.", "Save Deck", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    target.Elements("DeckDigimon").Remove();
+                    foreach (DataGridViewRow row in members.Rows)
+                    {
+                        if (row.IsNewRow) continue;
+
+                        var node = new XElement("DeckDigimon",
+                            new XElement("s_dwBaseDigimonID", Convert.ToString(row.Cells[0].Value, CultureInfo.InvariantCulture) ?? "0"),
+                            new XElement("s_szBaseDigimonName", Convert.ToString(row.Cells[1].Value, CultureInfo.InvariantCulture) ?? string.Empty),
+                            new XElement("s_nEvolslot", Convert.ToString(row.Cells[2].Value, CultureInfo.InvariantCulture) ?? "0"),
+                            new XElement("s_dwDestDigimonID", Convert.ToString(row.Cells[3].Value, CultureInfo.InvariantCulture) ?? "0"),
+                            new XElement("s_szDestDigimonName", Convert.ToString(row.Cells[4].Value, CultureInfo.InvariantCulture) ?? string.Empty));
+                        target.Add(node);
+                    }
+
+                    System.IO.File.Copy(sourceState.XmlPath, sourceState.XmlPath + ".editor.bak", true);
+                    latest.Save(sourceState.XmlPath);
+                    BuildDigimonBookCards(sourceState);
+
+                    TabPage? sourcePage = editorTabs.TabPages.Cast<TabPage>()
+                        .FirstOrDefault(x => ReferenceEquals(x.Tag, sourceState));
+                    if (sourcePage != null)
+                    {
+                        ApplyDigimonBookStableLayout(sourcePage, sourceState);
+                        EnhanceDigimonBookInternalEditors(sourcePage, sourceState);
+                        EnhanceDigimonBookSafeDeckButtons(sourcePage, sourceState);
+                    }
+
+                    MessageBox.Show("Deck saved successfully.", "Save Deck", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    editorTabs.SelectedTab = sourcePage ?? page;
+                }
+                catch (Exception ex)
+                {
+                    ShowEditorError("Save Deck", ex);
+                }
+            };
 
             editorTabs.TabPages.Add(page);
             editorTabs.SelectedTab = page;
